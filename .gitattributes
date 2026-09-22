@@ -1,0 +1,5 @@
+* text=auto
+*.sh text eol=lf
+# Capturas são binárias mesmo quando o sufixo não parece: nada de conversão
+# de fim de linha dentro de um .sigmf-data, sob pena de corromper amostras.
+*.sigmf-data binary

@@ -1,0 +1,25 @@
+.git
+.gitignore
+.gitattributes
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+.env
+.idea/
+.vscode/
+tests/
+tools/
+docs/
+# Capturas locais: uma única passagem tem gigabytes. Sem esta linha, um
+# `docker build` depois de uma sessão de gravação manda o disco inteiro para
+# o daemon como build context.
+captures/
+*.sigmf-data
+*.sigmf-meta

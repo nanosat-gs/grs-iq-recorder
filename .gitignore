@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# ===============================
+# Capturas de IQ
+# ===============================
+# NUNCA versionar captura de passagem: a 240 kS/s são 1,9 MB/s, e dez minutos
+# de LEO dão ~11 GB. As fixtures do E2 são a exceção, e por isso são curtas,
+# sintéticas e moram em tests/fixtures/ — versionadas de propósito.
+captures/
+*.sigmf-data
+*.sigmf-meta
+!tests/fixtures/**/*.sigmf-data
+!tests/fixtures/**/*.sigmf-meta
+
+# ===============================
+# Editores / OS
+# ===============================
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

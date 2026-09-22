@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grs-iq-recorder"
+version = "0.1.0"
+description = "Captura, replay e índice do fluxo de IQ da estação terrestre SpaceLab"
+readme = "README.md"
+requires-python = ">=3.11"
+
+# Nenhuma git URL, e em particular NÃO a spacelab-tracking: este serviço não
+# propaga órbita nem sabe o que é uma passagem. Ele grava amostras e as
+# reproduz. Manter essa ignorância é o que permite ao teste de regressão de
+# DSP rodar sem TLE, sem relógio de passagem e sem rede.
+#
+# pyzmq é dependência direta: sem ZMQ não há tap no fluxo de IQ nem replay.
+# numpy idem — o PSD do D1 e a leitura de complex64 são numpy, não opcional.
+# SQLAlchemy/psycopg2 são para o índice (C4), que o serviço trata como
+# conveniência: sem PG_DATABASE_URL ele grava do mesmo jeito.
+dependencies = [
+    "pyzmq>=25,<26",
+    "numpy>=1.26",
+    "SQLAlchemy>=2.0,<3.0",
+    "psycopg2-binary>=2.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
