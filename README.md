@@ -28,22 +28,36 @@ regressão de toda a metade de RF.
 
 ## Estado
 
-**Esqueleto (A2).** O serviço sobe, resolve o perfil de captura, imprime o
-resumo do que gravaria, e fica de pé. **Ele ainda não grava.**
+**Grava e reproduz.** Épicos A e C fechados.
 
 | Feito | O quê |
 |---|---|
 | A2 | esqueleto hexagonal — portas, modelos, config, boot |
 | A3 | `CaptureProfile` e a instância `grs-rx-fs2` |
 | A4 | contrato de captura versionado (SigMF) — `docs/capture-contract.md` |
-
-| A fazer | O quê |
-|---|---|
 | C1 | `ZmqIqSource` — tap ao vivo no PUB :5556 |
 | C2 | `FileIqSink` — grava o par SigMF e o hash |
 | C3 | `FileIqSource` + `ZmqIqPublisher` — replay |
 | C4 | `PostgresCaptureIndex` + `schema_check` no boot |
+
+| A fazer | O quê |
+|---|---|
 | D1 | `NumpyPsdView` — PSD e resumo |
+| D2 | contagem de frames na passagem/replay |
+
+## Usando
+
+```bash
+# grava 30 s do que estiver publicando IQ
+python -m iq_recorder.main record --seconds 30
+
+# reproduz uma captura no mesmo tópico
+python -m iq_recorder.main replay /app/captures/passagem-teste
+```
+
+No replay o publicador **BINDA** a :5556: o `grs-iq-rx` (ou o `grs-sdr-sim`)
+tem de estar desligado, ou os dois disputam a porta e quem perde cai em
+silêncio.
 
 ## Desenho
 

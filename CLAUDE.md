@@ -4,8 +4,8 @@ GRS IQ Recorder: captura, replay e índice do fluxo de IQ da estação terrestre
 SpaceLab. Único bloco da metade de RF escrito pela equipe — os outros três são
 adotados do `spacelab-ufsc`.
 
-**Estado: esqueleto (A2/A3/A4).** Sobe, resolve o perfil, imprime o resumo e
-fica de pé. Não grava ainda. Gravação é o Épico C.
+**Estado: grava e reproduz.** Épicos A e C fechados; falta o D (PSD e
+contagem de frames).
 
 ## Por que ele existe
 
@@ -24,8 +24,14 @@ domain/     models.py    value objects (CaptureProfile, IqBlock, CaptureMetadata
                          CaptureIndex, SpectrumView)
             capture.py   O CONTRATO (A4): SigMF, versões, sidecar. Função pura.
             profiles.py  Os perfis registrados (A3). Hoje: grs-rx-fs2.
-adapters/   vazio — Épico C
-application/ vazio — Épico C
+adapters/   zmq_iq_source.py       C1  tap ao vivo no PUB :5556
+            file_iq_sink.py        C2  grava o par SigMF + sha512
+            file_iq_source.py      C3  lê uma captura, confere o hash
+            zmq_iq_publisher.py    C3  republica no mesmo tópico
+            postgres_capture_index.py  C4  índice append-only
+application/ record.py  gravar: Source -> Sink -> Index
+            replay.py  reproduzir: Source -> Publisher
+schema_check.py  confere o índice no boot
 config.py   o que vem do ambiente
 main.py     boot
 ```
@@ -71,6 +77,23 @@ instante, com uma configuração. Reescrever a linha depois é reescrever o que 
 estação viu — e é assim que uma regressão de DSP fica impossível de reproduzir.
 
 ## Armadilhas conhecidas
+
+- **No replay o publicador BINDA a :5556.** O `grs-iq-rx` e o `grs-sdr-sim`
+  fazem o mesmo. Subir dois deles é disputa de porta, e quem perde cai em
+  silêncio — não com erro.
+- **`--fast` no replay estoura o demodulador.** Sem ritmo, a marca d'água de
+  recepção enche e o ZMQ começa a DESCARTAR blocos. A perda aparece como falha
+  de demodulação, que é o sintoma mais caro de diagnosticar. Use só com
+  consumidor offline.
+- **`CREATE TABLE IF NOT EXISTS` não adiciona coluna** a uma tabela que já
+  existe. Uma versão nova contra um banco antigo escreve numa coluna que não
+  está lá, e o erro aparece no FIM da gravação — quando a passagem já passou. É
+  o que o `schema_check` pega no boot. Ver `docs/schema-contract.md`.
+- **O perfil de um replay vem do ARQUIVO, não do registro.** Uma captura de
+  seis meses atrás foi feita com a configuração daquele dia; relê-la com o
+  perfil de hoje reescreveria a história.
+- **Uma captura nunca é sobrescrita.** `FileIqSink` recusa um id que já existe:
+  observação perdida não se refaz.
 
 - **A frequência do `grs-rx-fs2` é PROVISÓRIA.** 145.9 MHz é a beacon do
   **FS-1**, e está lá pelo mesmo motivo que as coordenadas `GS_*` da estação
