@@ -121,6 +121,7 @@ def do_record(args: argparse.Namespace, config: RecorderConfig) -> int:
             sink=sink,
             profile=config.profile,
             max_seconds=seconds,
+            max_bytes=args.max_bytes,
             index=index,
             cancel=_cancel,
         )
@@ -181,6 +182,46 @@ def do_replay(args: argparse.Namespace, config: RecorderConfig) -> int:
     return 0
 
 
+def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
+    """A leitura mínima: tem sinal nesta captura, e onde? (D1)"""
+    from iq_recorder.adapters.file_iq_source import FileIqSource
+    from iq_recorder.adapters.numpy_psd_view import NumpyPsdView
+
+    source = FileIqSource(args.capture)
+    view = NumpyPsdView()
+    summary = view.summarize(source, source.profile, fft_size=args.fft_size)
+
+    logger.info("captura ........... %s", source.data_path.name)
+    logger.info("perfil ............ %s", source.profile.name)
+    logger.info("amostras .......... %d", summary.sample_count)
+    logger.info("duração ........... %.3f s", summary.duration_seconds)
+    logger.info("sintonia .......... %.4f MHz", summary.center_frequency_hz / 1e6)
+    logger.info("taxa .............. %.1f kS/s", summary.sample_rate_hz / 1e3)
+    logger.info("pico do espectro .. %+.2f kHz do centro", summary.peak_offset_hz / 1e3)
+    logger.info("pico acima do piso  %.1f dB", summary.peak_above_floor_db)
+
+    if summary.has_signal:
+        logger.info("Há sinal: o pico se levanta do piso.")
+    else:
+        logger.warning(
+            "Isto parece RUÍDO: o maior bin está a %.1f dB do piso. Antes de "
+            "procurar defeito no demodulador, confira a sintonia e a antena.",
+            summary.peak_above_floor_db,
+        )
+
+    if args.csv:
+        freqs, psd_db = view.power_spectral_density(
+            FileIqSource(args.capture, verify=False), source.profile, fft_size=args.fft_size
+        )
+        with open(args.csv, "w", encoding="utf-8") as handle:
+            handle.write("offset_hz,db\n")
+            for frequency, power in zip(freqs, psd_db):
+                handle.write(f"{frequency:.1f},{power:.3f}\n")
+        logger.info("Espectro em %s", args.csv)
+
+    return 0 if summary.has_signal else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="iq-recorder", description=__doc__)
     sub = parser.add_subparsers(dest="command")
@@ -189,7 +230,12 @@ def build_parser() -> argparse.ArgumentParser:
     rec.add_argument("--capture-id", default=None,
                      help="Nome da captura. Padrão: perfil + instante UTC.")
     rec.add_argument("--seconds", type=int, default=None,
-                     help="Teto de gravação. Padrão: RECORDER_MAX_CAPTURE_SECONDS.")
+                     help="Teto de tempo. Padrão: RECORDER_MAX_CAPTURE_SECONDS.")
+    rec.add_argument("--max-bytes", type=int, default=None,
+                     help="Teto de disco, em bytes. Vale junto com --seconds: o "
+                          "primeiro que bater encerra. Protege contra uma taxa maior "
+                          "que a esperada, que nenhum teto de tempo pega — e é o "
+                          "controle certo para gerar uma fixture de tamanho exato.")
 
     rep = sub.add_parser("replay", help="republica uma captura no tópico de IQ")
     rep.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
@@ -199,6 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Despeja sem ritmo. Só para consumidor offline: a toda "
                           "velocidade a marca d'água do demodulador estoura e o ZMQ "
                           "começa a DESCARTAR blocos.")
+
+    ins = sub.add_parser("inspect", help="resumo e espectro de uma captura")
+    ins.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
+    ins.add_argument("--fft-size", type=int, default=4096)
+    ins.add_argument("--csv", default=None,
+                     help="Escreve o espectro num CSV, para plotar fora daqui.")
 
     return parser
 
@@ -227,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
         return do_record(args, config)
     if args.command == "replay":
         return do_replay(args, config)
+    if args.command == "inspect":
+        return do_inspect(args, config)
 
     # Sem subcomando: fica de pé. É o que o serviço faz no compose, onde ele
     # sobe junto com a estação e espera um comando — gravar é sob demanda, e a

@@ -40,10 +40,7 @@ regressão de toda a metade de RF.
 | C3 | `FileIqSource` + `ZmqIqPublisher` — replay |
 | C4 | `PostgresCaptureIndex` + `schema_check` no boot |
 
-| A fazer | O quê |
-|---|---|
-| D1 | `NumpyPsdView` — PSD e resumo |
-| D2 | contagem de frames na passagem/replay |
+| D1 | `NumpyPsdView` — PSD, resumo e `inspect` |
 
 ## Usando
 
@@ -53,7 +50,13 @@ python -m iq_recorder.main record --seconds 30
 
 # reproduz uma captura no mesmo tópico
 python -m iq_recorder.main replay /app/captures/passagem-teste
+
+# tem sinal nessa captura, e onde?
+python -m iq_recorder.main inspect /app/captures/passagem-teste
 ```
+
+O `inspect` sai com código 2 quando a captura parece ruído — dá para usá-lo
+como portão antes de gastar uma tarde depurando DSP.
 
 No replay o publicador **BINDA** a :5556: o `grs-iq-rx` (ou o `grs-sdr-sim`)
 tem de estar desligado, ou os dois disputam a porta e quem perde cai em

@@ -4,8 +4,7 @@ GRS IQ Recorder: captura, replay e índice do fluxo de IQ da estação terrestre
 SpaceLab. Único bloco da metade de RF escrito pela equipe — os outros três são
 adotados do `spacelab-ufsc`.
 
-**Estado: grava e reproduz.** Épicos A e C fechados; falta o D (PSD e
-contagem de frames).
+**Estado: grava, reproduz e lê.** Épicos A, C e D fechados.
 
 ## Por que ele existe
 
@@ -29,6 +28,7 @@ adapters/   zmq_iq_source.py       C1  tap ao vivo no PUB :5556
             file_iq_source.py      C3  lê uma captura, confere o hash
             zmq_iq_publisher.py    C3  republica no mesmo tópico
             postgres_capture_index.py  C4  índice append-only
+            numpy_psd_view.py      D1  PSD, resumo, "tem sinal aqui?"
 application/ record.py  gravar: Source -> Sink -> Index
             replay.py  reproduzir: Source -> Publisher
 schema_check.py  confere o índice no boot
@@ -77,6 +77,14 @@ instante, com uma configuração. Reescrever a linha depois é reescrever o que 
 estação viu — e é assim que uma regressão de DSP fica impossível de reproduzir.
 
 ## Armadilhas conhecidas
+
+- **`peak_above_floor_db` usa a MEDIANA como piso, não a média.** A média é
+  puxada para cima pelo próprio pico, e num sinal forte o piso pareceria mais
+  alto do que é — a captura boa seria reportada como fraca.
+- **A média de segmentos do PSD não deixa o pico mais ALTO; deixa-o no lugar
+  CERTO.** Num único FFT um espinho aleatório de ruído vence um tom fraco de
+  verdade. Depois de promediar, o piso fica liso e o tom, ainda que modesto,
+  passa a ser o maior. Otimizar pela altura levaria à conclusão oposta.
 
 - **No replay o publicador BINDA a :5556.** O `grs-iq-rx` e o `grs-sdr-sim`
   fazem o mesmo. Subir dois deles é disputa de porta, e quem perde cai em

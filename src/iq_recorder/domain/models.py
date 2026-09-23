@@ -152,3 +152,40 @@ class CaptureMetadata:
     @property
     def duration_seconds(self) -> float:
         return (self.ended_at - self.started_at).total_seconds()
+
+
+@dataclass(frozen=True)
+class CaptureSummary:
+    """A leitura mínima de uma captura: tem sinal aqui, e onde?
+
+    Existe para responder, em segundos, a pergunta que antecede qualquer
+    depuração de DSP — se o que foi gravado é sinal ou ruído. Sem isso, uma
+    captura de ruído vira uma tarde inteira caçando um bug no demodulador.
+    """
+
+    sample_count: int
+    duration_seconds: float
+    center_frequency_hz: float
+    sample_rate_hz: float
+
+    # Onde está o pico do espectro, em Hz relativos ao centro sintonizado.
+    # Perto de zero = sintonia certa. Longe = ou a sintonia errou, ou há
+    # Doppler não compensado, ou o satélite não é quem se pensava.
+    peak_offset_hz: float
+
+    # Quanto o pico se levanta acima do piso (a mediana do espectro), em dB.
+    # É ESTE número que separa sinal de ruído: num espectro só de ruído o
+    # maior bin fica a poucos dB da mediana, porque não há nada de fato
+    # levantado. Um pico é uma afirmação; a altura dele é a evidência.
+    peak_above_floor_db: float
+
+    @property
+    def has_signal(self) -> bool:
+        """Heurística, e assumidamente grosseira.
+
+        6 dB é pouco para um sinal forte e muito para ruído puro. Serve para
+        marcar uma captura como suspeita, nunca para descartá-la: quem decide
+        é quem olha o espectro.
+        """
+        return self.peak_above_floor_db >= 6.0
+
