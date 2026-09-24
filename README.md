@@ -53,6 +53,9 @@ python -m iq_recorder.main replay /app/captures/passagem-teste
 
 # tem sinal nessa captura, e onde?
 python -m iq_recorder.main inspect /app/captures/passagem-teste
+
+# traz um WAV do gqrx para dentro do cano
+python -m iq_recorder.main import-wav beacon.wav --baud 1200 --frequency 145900000
 ```
 
 O `inspect` sai com código 2 quando a captura parece ruído — dá para usá-lo

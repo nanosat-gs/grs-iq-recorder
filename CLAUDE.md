@@ -29,6 +29,7 @@ adapters/   zmq_iq_source.py       C1  tap ao vivo no PUB :5556
             zmq_iq_publisher.py    C3  republica no mesmo tópico
             postgres_capture_index.py  C4  índice append-only
             numpy_psd_view.py      D1  PSD, resumo, "tem sinal aqui?"
+            wav_iq_source.py           IqStreamSource sobre um WAV do gqrx
 application/ record.py  gravar: Source -> Sink -> Index
             replay.py  reproduzir: Source -> Publisher
 schema_check.py  confere o índice no boot
@@ -77,6 +78,15 @@ instante, com uma configuração. Reescrever a linha depois é reescrever o que 
 estação viu — e é assim que uma regressão de DSP fica impossível de reproduzir.
 
 ## Armadilhas conhecidas
+
+- **`import-wav` produz RECONSTRUÇÃO, não captura de antena.** O WAV do gqrx
+  em Narrow FM já passou pelo discriminador; o adapter integra aquilo de volta
+  à fase. O resultado tem envoltória constante por construção, e o que o gqrx
+  fez ao sinal (filtro, AGC, squelch) está embutido. Nada que dependa de
+  amplitude está sendo exercitado.
+- **A frequência de um `import-wav` é DECLARADA.** Áudio não carrega
+  portadora: o número vem do que o operador diz ter sintonizado, e o sidecar o
+  registra como `fixed`.
 
 - **`peak_above_floor_db` usa a MEDIANA como piso, não a média.** A média é
   puxada para cima pelo próprio pico, e num sinal forte o piso pareceria mais

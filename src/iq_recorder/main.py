@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import pathlib
 import signal
 import sys
 import threading
@@ -182,6 +183,54 @@ def do_replay(args: argparse.Namespace, config: RecorderConfig) -> int:
     return 0
 
 
+def do_import_wav(args: argparse.Namespace, config: RecorderConfig) -> int:
+    """Traz um WAV do gqrx para dentro do cano, como captura SigMF.
+
+    O WAV não é IQ — é a saída do discriminador, porque o gqrx em Narrow FM já
+    fez essa etapa. O WavIqSource integra aquilo de volta à fase e devolve
+    banda-base complexa, então a captura resultante entra no replay como
+    qualquer outra e o demodulador não sabe a diferença.
+
+    É reconstrução, não captura de antena: amplitude não sobrevive, e o que o
+    gqrx fez ao sinal está embutido. Ver o cabeçalho do adapter.
+    """
+    from iq_recorder.adapters.file_iq_sink import FileIqSink
+    from iq_recorder.adapters.wav_iq_source import WavIqSource
+    from iq_recorder.application.record import record
+
+    source = WavIqSource(args.wav, baud=args.baud, max_seconds=args.max_seconds)
+    profile = source.profile(
+        name=args.profile_name or f"wav-{args.baud}",
+        center_frequency_hz=args.frequency,
+    )
+    capture_id = args.capture_id or pathlib.Path(args.wav).stem
+
+    logger.info("Importando %s", source.path.name)
+    logger.info("  %d Hz, %.1f s, %.1f amostras por símbolo a %d baud",
+                source.sample_rate_hz, source.duration_seconds,
+                source.samples_per_symbol, args.baud)
+    logger.warning(
+        "RECONSTRUÇÃO, não captura de antena: a envoltória é constante por "
+        "construção, e o que o gqrx fez ao sinal (filtro, AGC, squelch) está "
+        "embutido. A frequência %.4f MHz é DECLARADA — áudio não carrega "
+        "portadora.", args.frequency / 1e6,
+    )
+
+    metadata = record(
+        source=source,
+        sink=FileIqSink(config.capture_dir, capture_id),
+        profile=profile,
+        index=build_index(config),
+    )
+
+    logger.info("%s: %d amostras, %.1f s", metadata.capture_id,
+                metadata.sample_count, metadata.duration_seconds)
+    logger.info("Arquivo: %s", metadata.data_path)
+    logger.info("Agora: inspect para ver o espectro, replay para alimentar o cano.")
+
+    return 0
+
+
 def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
     """A leitura mínima: tem sinal nesta captura, e onde? (D1)"""
     from iq_recorder.adapters.file_iq_source import FileIqSource
@@ -246,6 +295,20 @@ def build_parser() -> argparse.ArgumentParser:
                           "velocidade a marca d'água do demodulador estoura e o ZMQ "
                           "começa a DESCARTAR blocos.")
 
+    imp = sub.add_parser("import-wav",
+                         help="traz um WAV do gqrx para dentro do cano, como captura")
+    imp.add_argument("wav", help="Áudio do gqrx em Narrow FM, 16 bits.")
+    imp.add_argument("--baud", type=int, required=True,
+                     help="1200 para o beacon do FS-1, 2400 para o downlink.")
+    imp.add_argument("--frequency", type=float, required=True,
+                     help="A frequência que você sintonizou no gqrx, em Hz. Não está "
+                          "no arquivo — áudio não carrega portadora —, então ela é "
+                          "declarada e vai para o sidecar como tal.")
+    imp.add_argument("--capture-id", default=None)
+    imp.add_argument("--profile-name", default=None)
+    imp.add_argument("--max-seconds", type=float, default=None,
+                     help="Importa só os primeiros N segundos.")
+
     ins = sub.add_parser("inspect", help="resumo e espectro de uma captura")
     ins.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
     ins.add_argument("--fft-size", type=int, default=4096)
@@ -281,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
         return do_replay(args, config)
     if args.command == "inspect":
         return do_inspect(args, config)
+    if args.command == "import-wav":
+        return do_import_wav(args, config)
 
     # Sem subcomando: fica de pé. É o que o serviço faz no compose, onde ele
     # sobe junto com a estação e espera um comando — gravar é sob demanda, e a
