@@ -56,6 +56,9 @@ python -m iq_recorder.main inspect /app/captures/passagem-teste
 
 # traz um WAV do gqrx para dentro do cano
 python -m iq_recorder.main import-wav beacon.wav --baud 1200 --frequency 145900000
+
+# SDR real, via rede, sem GUI — republica um rtl_tcp na :5556
+python -m iq_recorder.main bridge-rtltcp --rtltcp-host 192.168.1.50     --tune-source tcp://frequency-synthesizer:5557
 ```
 
 O `inspect` sai com código 2 quando a captura parece ruído — dá para usá-lo
@@ -63,7 +66,28 @@ como portão antes de gastar uma tarde depurando DSP.
 
 No replay o publicador **BINDA** a :5556: o `grs-iq-rx` (ou o `grs-sdr-sim`)
 tem de estar desligado, ou os dois disputam a porta e quem perde cai em
-silêncio.
+silêncio. O `bridge-rtltcp` publica na mesma porta pelo mesmo motivo — é mais
+uma fonte de IQ intercambiável, não um serviço à parte.
+
+### `bridge-rtltcp` — SDR real, sem gqrx, sem GUI
+
+Conecta num [`rtl_tcp`](https://github.com/librtlsdr/librtlsdr) — o servidor
+de linha de comando do mesmo projeto que o `grs-iq-rx` já usa — e republica o
+IQ real (capturado, não reconstruído) na :5556. Só o `rtl_tcp` precisa de
+acesso USB ao dongle; a máquina que roda `iq_recorder` pode ser qualquer
+outra da rede.
+
+```bash
+# na máquina com o dongle, sem Docker:
+rtl_tcp -a 0.0.0.0 -p 1234
+```
+
+Com `--tune-source`, assina o mesmo `tune` em `:5557` que o `grs-sdr-sim`
+já consome — então o Station Manager comanda este receptor de verdade pelo
+mesmo caminho já validado com o simulador, sem precisar do gqrx nem de
+nenhum passo manual. Protocolo confirmado contra a fonte oficial do
+`librtlsdr` (`src/rtl_tcp.c`), não deduzido — ver o cabeçalho de
+`adapters/rtltcp_iq_source.py`.
 
 ## Desenho
 

@@ -30,6 +30,8 @@ adapters/   zmq_iq_source.py       C1  tap ao vivo no PUB :5556
             postgres_capture_index.py  C4  índice append-only
             numpy_psd_view.py      D1  PSD, resumo, "tem sinal aqui?"
             wav_iq_source.py           IqStreamSource sobre um WAV do gqrx
+            rtltcp_iq_source.py        IqStreamSource sobre rtl_tcp — SDR real,
+                                        via rede, sem gqrx, sintonizável por :5557
 application/ record.py  gravar: Source -> Sink -> Index
             replay.py  reproduzir: Source -> Publisher
 schema_check.py  confere o índice no boot
@@ -87,6 +89,18 @@ estação viu — e é assim que uma regressão de DSP fica impossível de repro
 - **A frequência de um `import-wav` é DECLARADA.** Áudio não carrega
   portadora: o número vem do que o operador diz ter sintonizado, e o sidecar o
   registra como `fixed`.
+
+- **`bridge-rtltcp` não é `import-wav`.** Um traz áudio JÁ DEMODULADO por um
+  app de terceiros (gqrx) e reconstrói IQ a partir dele — amplitude perdida,
+  filtro/AGC alheio embutido. O outro conecta num `rtl_tcp` e entrega IQ REAL,
+  como o `grs-iq-rx` faria, com amplitude intacta. São propósitos diferentes:
+  `import-wav` é para reprocessar uma gravação que já existe; `bridge-rtltcp`
+  é para operar a estação de verdade sem GUI e sem passthrough de USB no
+  Docker.
+- **O protocolo do `bridge-rtltcp` foi CONFIRMADO na fonte oficial**
+  (`librtlsdr/src/rtl_tcp.c`), não deduzido de memória — os testes usam um
+  servidor TCP de verdade escrito a partir do mesmo protocolo, não um mock em
+  memória que poderia concordar com um erro do adapter em silêncio.
 
 - **`peak_above_floor_db` usa a MEDIANA como piso, não a média.** A média é
   puxada para cima pelo próprio pico, e num sinal forte o piso pareceria mais

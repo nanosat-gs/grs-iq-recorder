@@ -1,6 +1,6 @@
 """Ponto de entrada do GRS IQ Recorder.
 
-Dois subcomandos, e a simetria entre eles é o serviço inteiro:
+Núcleo de dois subcomandos, e a simetria entre eles é o serviço inteiro:
 
     record   ZmqIqSource  -> FileIqSink      -> PostgresCaptureIndex
     replay   FileIqSource -> ZmqIqPublisher
@@ -8,6 +8,15 @@ Dois subcomandos, e a simetria entre eles é o serviço inteiro:
 A porta da ESQUERDA é a mesma nos dois. Gravar de um rádio e reproduzir de um
 arquivo são o mesmo laço com adapters diferentes — e é por isso que o teste
 ponta a ponta roda sem hardware.
+
+Um terceiro comando, `bridge-rtltcp`, não grava nada: só republica.
+
+    bridge-rtltcp   RtlTcpIqSource -> ZmqIqPublisher
+
+Existe para transformar um `rtl_tcp` (SDR real, na rede, sem GUI) num
+publicador de IQ na :5556 indistinguível do `grs-iq-rx` ou do `grs-sdr-sim` —
+o `grs-demodulator` do outro lado não sabe, e não precisa saber, qual das três
+fontes está publicando.
 """
 
 from __future__ import annotations
@@ -231,6 +240,66 @@ def do_import_wav(args: argparse.Namespace, config: RecorderConfig) -> int:
     return 0
 
 
+def do_bridge_rtltcp(args: argparse.Namespace, config: RecorderConfig) -> int:
+    """Republica um `rtl_tcp` como fonte de IQ na :5556 — sem gqrx, sem GUI.
+
+    RtlTcpIqSource -> ZmqIqPublisher, para sempre, até SIGTERM/SIGINT.
+
+    Frequência, taxa e ganho vêm do CaptureProfile por padrão — o mesmo
+    perfil que `record` usaria para esse enlace — e podem ser sobrepostos por
+    linha de comando quando o operador quer sintonizar algo fora do perfil.
+    """
+    from iq_recorder.adapters.rtltcp_iq_source import RtlTcpIqSource
+    from iq_recorder.adapters.zmq_iq_publisher import ZmqIqPublisher
+
+    profile = config.profile
+    frequency_hz = args.frequency if args.frequency is not None else profile.center_frequency_hz
+    sample_rate_hz = args.sample_rate if args.sample_rate is not None else int(profile.sample_rate_hz)
+    gain_db = args.gain if args.gain is not None else profile.gain_db
+
+    logger.info("Conectando em rtl_tcp %s:%d", args.rtltcp_host, args.rtltcp_port)
+
+    source = RtlTcpIqSource(
+        host=args.rtltcp_host,
+        port=args.rtltcp_port,
+        sample_rate_hz=sample_rate_hz,
+        frequency_hz=frequency_hz,
+        gain_db=gain_db,
+        tune_address=args.tune_source,
+    )
+
+    logger.info("rtl_tcp: tuner_type=%d, %d ganhos disponíveis",
+                source.tuner_type, source.tuner_gain_count)
+    logger.info("sintonia .......... %.4f MHz", frequency_hz / 1e6)
+    logger.info("taxa .............. %.1f kS/s", sample_rate_hz / 1e3)
+    logger.info("ganho ............. %s",
+                "automático" if gain_db is None else f"{gain_db} dB")
+    if args.tune_source:
+        logger.info("sintonia comandável por %s (mesmo contrato do grs-sdr-sim)",
+                    args.tune_source)
+    else:
+        logger.warning("Sem --tune-source: sintonia FIXA. O Station Manager não "
+                       "consegue mover este receptor.")
+
+    publisher = ZmqIqPublisher(config.iq_publish_address)
+    logger.info("publicando IQ em %s", config.iq_publish_address)
+
+    blocks = 0
+    try:
+        for block in source.blocks():
+            if _cancel.is_set():
+                break
+            publisher.publish(block)
+            blocks += 1
+    finally:
+        source.close()
+        publisher.close()
+
+    logger.info("Encerrado após %d lotes.", blocks)
+
+    return 0
+
+
 def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
     """A leitura mínima: tem sinal nesta captura, e onde? (D1)"""
     from iq_recorder.adapters.file_iq_source import FileIqSource
@@ -309,6 +378,26 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("--max-seconds", type=float, default=None,
                      help="Importa só os primeiros N segundos.")
 
+    brg = sub.add_parser("bridge-rtltcp",
+                         help="republica um rtl_tcp como fonte de IQ na :5556")
+    brg.add_argument("--rtltcp-host", required=True,
+                     help="Endereço do rtl_tcp — a máquina onde o dongle está de "
+                          "verdade. rtl_tcp roda lá com `rtl_tcp -a 0.0.0.0 -p 1234`.")
+    brg.add_argument("--rtltcp-port", type=int, default=1234,
+                     help="Porta do rtl_tcp. 1234 é o padrão do próprio rtl_tcp.")
+    brg.add_argument("--frequency", type=float, default=None,
+                     help="Sintonia inicial, em Hz. Padrão: a do CaptureProfile "
+                          "(RECORDER_PROFILE).")
+    brg.add_argument("--sample-rate", type=int, default=None,
+                     help="Taxa, em S/s. Padrão: a do CaptureProfile.")
+    brg.add_argument("--gain", type=float, default=None,
+                     help="Ganho manual, em dB. Padrão: o do CaptureProfile "
+                          "(None = automático).")
+    brg.add_argument("--tune-source", default=None,
+                     help="PUB do frequency-synthesizer em :5557, o mesmo contrato "
+                          "que o grs-sdr-sim consome. Omitido = sintonia fixa: o "
+                          "Station Manager não consegue mover este receptor.")
+
     ins = sub.add_parser("inspect", help="resumo e espectro de uma captura")
     ins.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
     ins.add_argument("--fft-size", type=int, default=4096)
@@ -346,6 +435,8 @@ def main(argv: list[str] | None = None) -> int:
         return do_inspect(args, config)
     if args.command == "import-wav":
         return do_import_wav(args, config)
+    if args.command == "bridge-rtltcp":
+        return do_bridge_rtltcp(args, config)
 
     # Sem subcomando: fica de pé. É o que o serviço faz no compose, onde ele
     # sobe junto com a estação e espera um comando — gravar é sob demanda, e a
