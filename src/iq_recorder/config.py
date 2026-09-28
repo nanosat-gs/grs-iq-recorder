@@ -21,6 +21,8 @@ DEFAULT_IQ_SOURCE_ADDRESS = "tcp://grs-iq-rx:5556"
 DEFAULT_IQ_PUBLISH_ADDRESS = "tcp://*:5556"
 DEFAULT_CAPTURE_DIR = "/app/captures"
 DEFAULT_MAX_CAPTURE_SECONDS = 60
+# Saída do detector de syncword. Só é assinada com --count-packets.
+DEFAULT_PACKETS_ADDRESS = "tcp://grs-syncword-detector:5558"
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,7 @@ class RecorderConfig:
     capture_dir: str
     max_capture_seconds: int
     database_url: str | None
+    packets_address: str = DEFAULT_PACKETS_ADDRESS
 
 
 def _int_from(source: dict[str, str], name: str, default: int) -> int:
@@ -72,4 +75,5 @@ def load_config(env: dict[str, str] | None = None) -> RecorderConfig:
         # painel do GRS Manager, que degrada sem o TC Scheduler em vez de
         # falhar.
         database_url=source.get("PG_DATABASE_URL") or None,
+        packets_address=source.get("RECORDER_PACKETS_ADDRESS", DEFAULT_PACKETS_ADDRESS),
     )

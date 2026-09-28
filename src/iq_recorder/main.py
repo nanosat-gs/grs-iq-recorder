@@ -9,16 +9,17 @@ A porta da ESQUERDA é a mesma nos dois. Gravar de um rádio e reproduzir de um
 arquivo são o mesmo laço com adapters diferentes — e é por isso que o teste
 ponta a ponta roda sem hardware.
 
-Dois comandos-ponte não gravam nada: só republicam.
+Um comando-ponte não grava nada: só republica.
 
     bridge-rtltcp   RtlTcpIqSource -> ZmqIqPublisher
-    bridge-usrp     UsrpIqSource   -> ZmqIqPublisher
 
-Existem para transformar um SDR real na rede (um `rtl_tcp`, ou um USRP N210
-via UHD) num publicador de IQ na :5556 indistinguível do `grs-iq-rx` ou do
-`grs-sdr-sim` — o `grs-demodulator` do outro lado não sabe, e não precisa
-saber, qual das fontes está publicando. `bridge-usrp` só roda dentro da
-imagem `Dockerfile.usrp`: a imagem principal deste serviço não inclui `uhd`.
+Transforma um `rtl_tcp` (SDR na rede, sem GUI) num publicador de IQ na :5556
+indistinguível do `grs-iq-rx`. O USRP N210 NÃO passa por aqui: ele tem
+receptor próprio no bloco SDR (`grs-iq-rx/usrp`, python3-uhd, com painel).
+
+`record` e `replay` aceitam `--count-packets`: assinam a saída do detector de
+syncword durante a operação e dizem quantos raw packets saíram — a metade
+"contagem de frames" da leitura mínima.
 """
 
 from __future__ import annotations
@@ -100,6 +101,46 @@ def build_index(config: RecorderConfig):
         return None
 
 
+def start_packet_counter(args: argparse.Namespace, config: RecorderConfig, *, live: bool):
+    """--count-packets: assina a saída do detector durante a operação.
+
+    `live`: numa gravação a fonte CONTINUA transmitindo depois do fim, então
+    esperar os pacotes "em trânsito" contaria sinal que não está na captura
+    (medido: 20 contra 17). Sem espera, os pacotes em trânsito no começo (de
+    antes da captura) e no fim (de dentro dela) se compensam. No replay o
+    fluxo acaba de fato, e a espera é o certo.
+    """
+    if not getattr(args, "count_packets", False):
+        return None
+
+    from iq_recorder.adapters.zmq_packet_counter import DEFAULT_GRACE_S, PacketCounter
+
+    counter = PacketCounter(config.packets_address, grace_s=0.0 if live else DEFAULT_GRACE_S)
+    counter.start()
+    logger.info("Contando raw packets em %s.", config.packets_address)
+    return counter
+
+
+def report_packets(counter) -> None:
+    if counter is None:
+        return
+
+    count = counter.finish()
+    offsets = counter.bit_offsets
+    logger.info("%d raw packets saíram do detector.", count)
+    if len(offsets) > 1:
+        spacing = [b - a for a, b in zip(offsets, offsets[1:])]
+        typical = max(set(spacing), key=spacing.count)
+        logger.info("Espaçamento entre pacotes: %d bits na maioria (%d de %d intervalos).",
+                    typical, spacing.count(typical), len(spacing))
+    if count == 0:
+        logger.warning(
+            "Nenhum pacote. O detector está de pé? No replay, o simulador/rádio "
+            "tem de estar DESLIGADO e o replay tem de responder por grs-iq-rx "
+            "(serviço grs-iq-replay, com --use-aliases)."
+        )
+
+
 def default_capture_id(profile: CaptureProfile) -> str:
     """Nome legível e ordenável: perfil + instante UTC.
 
@@ -126,6 +167,7 @@ def do_record(args: argparse.Namespace, config: RecorderConfig) -> int:
     source = ZmqIqSource(config.iq_source_address)
     sink = FileIqSink(config.capture_dir, capture_id)
     index = build_index(config)
+    counter = start_packet_counter(args, config, live=True)
 
     try:
         metadata = record(
@@ -141,6 +183,8 @@ def do_record(args: argparse.Namespace, config: RecorderConfig) -> int:
         source.close()
         if index is not None:
             index.close()
+
+    report_packets(counter)
 
     if metadata.sample_count == 0:
         logger.error(
@@ -174,7 +218,11 @@ def do_replay(args: argparse.Namespace, config: RecorderConfig) -> int:
         config.iq_publish_address,
     )
 
-    publisher = ZmqIqPublisher(config.iq_publish_address)
+    from iq_recorder.adapters.zmq_iq_publisher import DEFAULT_SUBSCRIBER_TIMEOUT_S
+
+    publisher = ZmqIqPublisher(config.iq_publish_address,
+                               wait_for_subscriber_s=DEFAULT_SUBSCRIBER_TIMEOUT_S)
+    counter = start_packet_counter(args, config, live=False)
 
     try:
         blocks = replay(
@@ -190,6 +238,7 @@ def do_replay(args: argparse.Namespace, config: RecorderConfig) -> int:
         publisher.close()
 
     logger.info("%d lotes republicados.", blocks)
+    report_packets(counter)
 
     return 0
 
@@ -302,67 +351,6 @@ def do_bridge_rtltcp(args: argparse.Namespace, config: RecorderConfig) -> int:
     return 0
 
 
-def do_bridge_usrp(args: argparse.Namespace, config: RecorderConfig) -> int:
-    """Republica um USRP N210 (via UHD) como fonte de IQ na :5556.
-
-    UsrpIqSource -> ZmqIqPublisher, mesmo formato do `bridge-rtltcp`. A
-    diferença fica inteira dentro do adapter: aqui não há protocolo de rede
-    reimplementado, é UHD de verdade — por isso este comando só roda dentro
-    da imagem `Dockerfile.usrp` (`uhd` não existe na imagem principal).
-    """
-    from iq_recorder.adapters.usrp_iq_source import UsrpConnectionError, UsrpIqSource
-    from iq_recorder.adapters.zmq_iq_publisher import ZmqIqPublisher
-
-    profile = config.profile
-    frequency_hz = args.frequency if args.frequency is not None else profile.center_frequency_hz
-    sample_rate_hz = args.sample_rate if args.sample_rate is not None else profile.sample_rate_hz
-    gain_db = args.gain if args.gain is not None else profile.gain_db
-
-    logger.info("Conectando no USRP %s", args.usrp_host)
-
-    try:
-        source = UsrpIqSource(
-            host=args.usrp_host,
-            sample_rate_hz=sample_rate_hz,
-            frequency_hz=frequency_hz,
-            gain_db=gain_db,
-            channel=args.usrp_channel,
-            tune_address=args.tune_source,
-        )
-    except UsrpConnectionError as error:
-        logger.error("%s", error)
-        return 1
-
-    logger.info("sintonia .......... %.4f MHz", frequency_hz / 1e6)
-    logger.info("taxa .............. %.1f kS/s", sample_rate_hz / 1e3)
-    logger.info("ganho ............. %s",
-                "automático" if gain_db is None else f"{gain_db} dB")
-    if args.tune_source:
-        logger.info("sintonia comandável por %s (mesmo contrato do grs-sdr-sim)",
-                    args.tune_source)
-    else:
-        logger.warning("Sem --tune-source: sintonia FIXA. O Station Manager não "
-                       "consegue mover este receptor.")
-
-    publisher = ZmqIqPublisher(config.iq_publish_address)
-    logger.info("publicando IQ em %s", config.iq_publish_address)
-
-    blocks = 0
-    try:
-        for block in source.blocks():
-            if _cancel.is_set():
-                break
-            publisher.publish(block)
-            blocks += 1
-    finally:
-        source.close()
-        publisher.close()
-
-    logger.info("Encerrado após %d lotes.", blocks)
-
-    return 0
-
-
 def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
     """A leitura mínima: tem sinal nesta captura, e onde? (D1)"""
     from iq_recorder.adapters.file_iq_source import FileIqSource
@@ -382,7 +370,8 @@ def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
     logger.info("pico acima do piso  %.1f dB", summary.peak_above_floor_db)
 
     if summary.has_signal:
-        logger.info("Há sinal: o pico se levanta do piso.")
+        logger.info("Há sinal: o pico se levanta do piso. Para contar os quadros, "
+                    "reproduza com `replay --count-packets`.")
     else:
         logger.warning(
             "Isto parece RUÍDO: o maior bin está a %.1f dB do piso. Antes de "
@@ -417,6 +406,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "primeiro que bater encerra. Protege contra uma taxa maior "
                           "que a esperada, que nenhum teto de tempo pega — e é o "
                           "controle certo para gerar uma fixture de tamanho exato.")
+    rec.add_argument("--count-packets", action="store_true",
+                     help="Conta os raw packets que o detector publica durante a "
+                          "gravação (RECORDER_PACKETS_ADDRESS).")
 
     rep = sub.add_parser("replay", help="republica uma captura no tópico de IQ")
     rep.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
@@ -426,6 +418,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Despeja sem ritmo. Só para consumidor offline: a toda "
                           "velocidade a marca d'água do demodulador estoura e o ZMQ "
                           "começa a DESCARTAR blocos.")
+    rep.add_argument("--count-packets", action="store_true",
+                     help="Conta os raw packets que o detector publica enquanto a "
+                          "captura é reproduzida (RECORDER_PACKETS_ADDRESS). Comparar "
+                          "com a contagem da gravação prova o replay.")
 
     imp = sub.add_parser("import-wav",
                          help="traz um WAV do gqrx para dentro do cano, como captura")
@@ -457,26 +453,6 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Ganho manual, em dB. Padrão: o do CaptureProfile "
                           "(None = automático).")
     brg.add_argument("--tune-source", default=None,
-                     help="PUB do frequency-synthesizer em :5557, o mesmo contrato "
-                          "que o grs-sdr-sim consome. Omitido = sintonia fixa: o "
-                          "Station Manager não consegue mover este receptor.")
-
-    usb = sub.add_parser("bridge-usrp",
-                         help="republica um USRP N210 (via UHD) como fonte de IQ na :5556")
-    usb.add_argument("--usrp-host", required=True,
-                     help="IP do USRP na rede (Gigabit Ethernet nativo do N210, "
-                          "padrão de fábrica 192.168.10.2).")
-    usb.add_argument("--usrp-channel", type=int, default=0,
-                     help="Canal RX do USRP. 0 no N210, que tem uma única daughterboard RX.")
-    usb.add_argument("--frequency", type=float, default=None,
-                     help="Sintonia inicial, em Hz. Padrão: a do CaptureProfile "
-                          "(RECORDER_PROFILE).")
-    usb.add_argument("--sample-rate", type=float, default=None,
-                     help="Taxa, em S/s. Padrão: a do CaptureProfile.")
-    usb.add_argument("--gain", type=float, default=None,
-                     help="Ganho manual, em dB. Padrão: o do CaptureProfile "
-                          "(None = automático).")
-    usb.add_argument("--tune-source", default=None,
                      help="PUB do frequency-synthesizer em :5557, o mesmo contrato "
                           "que o grs-sdr-sim consome. Omitido = sintonia fixa: o "
                           "Station Manager não consegue mover este receptor.")
@@ -520,8 +496,6 @@ def main(argv: list[str] | None = None) -> int:
         return do_import_wav(args, config)
     if args.command == "bridge-rtltcp":
         return do_bridge_rtltcp(args, config)
-    if args.command == "bridge-usrp":
-        return do_bridge_usrp(args, config)
 
     # Sem subcomando: fica de pé. É o que o serviço faz no compose, onde ele
     # sobe junto com a estação e espera um comando — gravar é sob demanda, e a

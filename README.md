@@ -45,11 +45,11 @@ regressão de toda a metade de RF.
 ## Usando
 
 ```bash
-# grava 30 s do que estiver publicando IQ
-python -m iq_recorder.main record --seconds 30
+# grava 30 s do que estiver publicando IQ, contando os pacotes que saem do detector
+python -m iq_recorder.main record --seconds 30 --count-packets
 
-# reproduz uma captura no mesmo tópico
-python -m iq_recorder.main replay /app/captures/passagem-teste
+# reproduz uma captura no mesmo tópico (no compose: serviço grs-iq-replay, abaixo)
+python -m iq_recorder.main replay /app/captures/passagem-teste --count-packets
 
 # tem sinal nessa captura, e onde?
 python -m iq_recorder.main inspect /app/captures/passagem-teste
@@ -59,18 +59,38 @@ python -m iq_recorder.main import-wav beacon.wav --baud 1200 --frequency 1459000
 
 # SDR real, via rede, sem GUI — republica um rtl_tcp na :5556
 python -m iq_recorder.main bridge-rtltcp --rtltcp-host 192.168.1.50     --tune-source tcp://frequency-synthesizer:5557
-
-# USRP N210 real, via UHD — só dentro da imagem Dockerfile.usrp
-python -m iq_recorder.main bridge-usrp --usrp-host 192.168.10.2     --tune-source tcp://frequency-synthesizer:5557
 ```
 
 O `inspect` sai com código 2 quando a captura parece ruído — dá para usá-lo
-como portão antes de gastar uma tarde depurando DSP.
+como portão antes de gastar uma tarde depurando DSP. Ele mostra o espectro;
+a **contagem de quadros** vem de `--count-packets`, que assina a saída do
+detector de syncword (`RECORDER_PACKETS_ADDRESS`) durante a gravação ou o
+replay — o gravador não demodula nada, então conta do lado de fora, que é o
+que prova o cano inteiro.
 
-No replay o publicador **BINDA** a :5556: o `grs-iq-rx` (ou o `grs-sdr-sim`)
-tem de estar desligado, ou os dois disputam a porta e quem perde cai em
-silêncio. `bridge-rtltcp` e `bridge-usrp` publicam na mesma porta pelo mesmo
-motivo — são mais uma fonte de IQ intercambiável, não um serviço à parte.
+### Replay pelo cano (compose)
+
+O replay **BINDA** a :5556 e precisa responder pelo nome da fonte ao vivo
+(`grs-iq-rx`), porque é esse o nome que o demodulador assina. Por isso ele é
+um serviço próprio, `grs-iq-replay`, e a fonte ao vivo tem de estar desligada:
+
+```bash
+docker compose stop grs-sdr-sim            # ou grs-iq-rx-usrp / grs-iq-rx
+docker compose run --rm --use-aliases grs-iq-replay replay /app/captures/<nome> --count-packets
+```
+
+`--use-aliases` é obrigatório: sem ele o `run` não aplica o alias. Medido ao
+vivo: uma gravação de 10 s contou 16 pacotes, e três replays dela contaram
+16, 16 e 16.
+
+O publicador do replay é XPUB e **espera o demodulador se inscrever** antes
+de começar. Uma pausa fixa não bastava: com a fonte desligada, o demodulador
+fica tentando resolver um nome que não existe, e a consulta de DNS trava a
+thread do ZMQ por segundos — dois replays do mesmo arquivo chegaram a dar 13
+e 9 pacotes.
+
+O USRP N210 não passa por este repositório: ele tem receptor próprio no bloco
+SDR (`grs-iq-rx`, pasta `usrp/`, python3-uhd, com painel de configuração).
 
 ### `bridge-rtltcp` — SDR real, sem gqrx, sem GUI
 
@@ -91,32 +111,6 @@ mesmo caminho já validado com o simulador, sem precisar do gqrx nem de
 nenhum passo manual. Protocolo confirmado contra a fonte oficial do
 `librtlsdr` (`src/rtl_tcp.c`), não deduzido — ver o cabeçalho de
 `adapters/rtltcp_iq_source.py`.
-
-### `bridge-usrp` — USRP N210 real, via UHD
-
-O rádio SDR real da estação é um [Ettus/NI USRP
-N210](https://www.ettus.com/all-products/un210-kit/): Gigabit Ethernet
-nativo, não USB — não há dongle nem `rtl_tcp` neste caso. A Ettus não
-documenta o protocolo de rede do USRP para reimplementação por terceiros, só
-recomenda a biblioteca deles (UHD, "USRP Hardware Driver"). Por isso este
-adapter é uma camada fina sobre o UHD, não um cliente de protocolo escrito do
-zero como o `RtlTcpIqSource` — ver o cabeçalho de `adapters/usrp_iq_source.py`
-para o que foi (e o que NÃO foi, por falta de hardware) confirmado.
-
-Roda **só** dentro da imagem `Dockerfile.usrp` — o `python3-uhd` do Debian só
-é importável pelo Python do sistema (`/usr/bin/python3`), e a imagem
-principal deste serviço (`python:3.11-slim`) usa um Python diferente,
-compilado à parte, que não enxerga pacotes instalados via apt.
-
-```bash
-docker build -f Dockerfile.usrp -t grs-iq-recorder-usrp .
-docker run --rm grs-iq-recorder-usrp python3 -m iq_recorder.main bridge-usrp     --usrp-host 192.168.10.2 --tune-source tcp://frequency-synthesizer:5557
-```
-
-Com `--tune-source`, assina o mesmo `tune` em `:5557` que o `grs-sdr-sim` e o
-`bridge-rtltcp` já consomem — o Station Manager comanda este receptor pelo
-mesmo caminho, sem precisar saber que do outro lado há UHD em vez de um
-protocolo de rede próprio.
 
 ## Desenho
 

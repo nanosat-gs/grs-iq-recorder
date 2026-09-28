@@ -18,7 +18,9 @@ from iq_recorder.domain.models import CaptureProfile, FrequencySource, SampleFor
 # ATENÇÃO: A FREQUÊNCIA ABAIXO É UM VALOR PROVISÓRIO.
 #
 # A modulação do FS-2 está confirmada no firmware do TTC2 (Si446x,
-# MODEM_MOD_TYPE = 0x03 => 2GFSK) e o syncword do NGHam é BA 67 54 7E. O que
+# MODEM_MOD_TYPE = 0x03 => 2GFSK) e o syncword do NGHam é 5D E6 2A 7E (o
+# NGH_SYNC do ngham.c; NÃO BA 67 54 7E, a versão com os bits invertidos que
+# circulou no documento da fatia e não acha nada num sinal real). O que
 # NÃO está confirmado é a frequência de downlink nem o baud: dependem da
 # coordenação IARU / do datasheet do TTC2, e é o item 4 do §4 do documento da
 # fatia — a última incerteza de RF que sobrou.
@@ -40,11 +42,16 @@ _FS2_DOWNLINK_HZ_PLACEHOLDER = 145_900_000.0
 # 2. 240000 / 4800 = 50 amostras por símbolo, exato. Sem resto, o
 #    sincronismo de tempo (Mueller & Muller) não começa perdendo fase por
 #    conta de arredondamento.
+#
+# É a taxa do CANO (:5556), não necessariamente a do rádio. O USRP N210 não
+# gera 240 kS/s (só 100 MHz / N); o grs-iq-rx/usrp pede 250 kS/s, exato no
+# N210, e reamostra por 24/25 antes de publicar. A captura grava o que passa
+# na :5556 — então 240 kS/s é o número certo para o sidecar nos dois rádios.
 _GRS_RX_SAMPLE_RATE_HZ = 240_000.0
 
 GRS_RX_FS2 = CaptureProfile(
     name="grs-rx-fs2",
-    description="GRS-RX / downlink FS-2 — 2GFSK, NGHam, syncword BA 67 54 7E",
+    description="GRS-RX / downlink FS-2 — 2GFSK, NGHam, syncword 5D E6 2A 7E",
     center_frequency_hz=_FS2_DOWNLINK_HZ_PLACEHOLDER,
     sample_rate_hz=_GRS_RX_SAMPLE_RATE_HZ,
     datatype=SampleFormat.CF32_LE,
@@ -52,10 +59,10 @@ GRS_RX_FS2 = CaptureProfile(
     # sem medir o caminho de RF real. Fixar ganho é coisa de depois da
     # primeira campanha, com medida na mão.
     gain_db=None,
-    rf_path="antena -> RTL-SDR (grs-iq-rx) -> ZMQ PUB :5556",
-    # FIXED porque a impl. C do `grs-iq-rx` não tem retune: ela sintoniza no
-    # boot e fica. Vira TUNE_TOPIC quando o Doppler entrar, e aí a frequência
-    # do sidecar passa a ser observada em vez de declarada.
+    rf_path="antena -> USRP N210 (grs-iq-rx/usrp, UHD, 250k -> 240k) -> ZMQ PUB :5556",
+    # FIXED porque o gravador não assina o `tune`: o sidecar registra a
+    # frequência do perfil. Vira TUNE_TOPIC quando o Doppler entrar na
+    # captura, e aí a frequência passa a ser observada em vez de declarada.
     frequency_source=FrequencySource.FIXED,
 )
 
