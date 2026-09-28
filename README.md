@@ -110,7 +110,7 @@ compilado à parte, que não enxerga pacotes instalados via apt.
 
 ```bash
 docker build -f Dockerfile.usrp -t grs-iq-recorder-usrp .
-docker run --rm grs-iq-recorder-usrp bridge-usrp     --usrp-host 192.168.10.2 --tune-source tcp://frequency-synthesizer:5557
+docker run --rm grs-iq-recorder-usrp python3 -m iq_recorder.main bridge-usrp     --usrp-host 192.168.10.2 --tune-source tcp://frequency-synthesizer:5557
 ```
 
 Com `--tune-source`, assina o mesmo `tune` em `:5557` que o `grs-sdr-sim` e o
