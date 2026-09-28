@@ -1,0 +1,64 @@
+# GRS IQ Recorder — variante com UHD, para falar com um USRP de verdade.
+#
+# IMAGEM SEPARADA da principal (Dockerfile), e por um motivo concreto,
+# testado, não hipotético: o `python3-uhd` do Debian só é importável pelo
+# Python DO SISTEMA (`/usr/bin/python3`, instalado via apt). A imagem
+# principal deste serviço é `FROM python:3.11-slim`, cujo Python é compilado
+# à parte (`/usr/local/bin/python3`) — os dois não compartilham
+# site-packages. Confirmado rodando os dois lado a lado: `apt-get install
+# python3-uhd` numa imagem `python:3.11-slim` deixa o módulo INVISÍVEL para o
+# `python3` que a imagem de fato usa. A falha não aparece no build — só no
+# `import uhd`, em produção, o pior lugar para descobrir isso.
+#
+# Por isso: `debian:bookworm-slim` puro, com TUDO no mesmo Python do sistema.
+#
+# Pacote confirmado disponível em bookworm (o mesmo Debian que a imagem
+# principal usa por baixo): `python3-uhd` 4.3.0.0+ds1-5. Instalado e
+# `import uhd` testado numa corrida real antes deste arquivo existir.
+
+FROM debian:bookworm-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# python3-uhd    o driver + bindings Python (puxa libuhd4.3.0 como dependência)
+# uhd-host       utilitários de linha de comando — uhd_find_devices,
+#                uhd_images_downloader. O N210 (e a família USRP2) PRECISA de
+#                imagens de FPGA/firmware compatíveis para aceitar conexão;
+#                uhd_images_downloader é quem baixa isso. NÃO baixamos no
+#                build: são centenas de MB, e a versão certa depende do
+#                firmware do rádio físico — rodar o downloader é passo de
+#                setup do operador, não do build da imagem.
+# python3-pip    para instalar o pacote iq_recorder no MESMO Python do UHD.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-uhd \
+        uhd-host \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+
+# --break-system-packages: o Python do Debian 12 é "externally managed"
+# (PEP 668) e recusa `pip install` fora de venv por padrão — confirmado, a
+# mensagem de erro chega a citar o PEP. Aceitável aqui: esta imagem existe só
+# para este pacote, não há outro dono do Python do sistema para proteger.
+#
+# numpy<2 é OBRIGATÓRIO, não estilo — confirmado quebrando de verdade antes
+# desta linha existir. O `python3-uhd` do Debian (a extensão compilada
+# `libpyuhd`) foi construído contra a C-API do NumPy 1.x. Deixar o pip
+# instalar o numpy mais novo que o pyproject.toml pede (>=1.26, sem teto)
+# atualiza para a família 2.x — que quebra essa C-API — e o `import uhd`
+# passa a falhar com:
+#
+#     AttributeError: _ARRAY_API not found
+#
+# em vez de qualquer erro que mencione numpy. `numpy>=1.26,<2` satisfaz o
+# pyproject.toml (1.26 foi o último 1.x) e evita a quebra. Esta é a ÚNICA
+# imagem do projeto com este teto — as outras não compilam nada contra a
+# C-API do numpy, e prender a versão ali seria travar sem motivo.
+RUN pip3 install --break-system-packages --no-cache-dir -e . "numpy>=1.26,<2"
+
+CMD ["python3", "-m", "iq_recorder.main"]

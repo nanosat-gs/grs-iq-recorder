@@ -9,14 +9,16 @@ A porta da ESQUERDA é a mesma nos dois. Gravar de um rádio e reproduzir de um
 arquivo são o mesmo laço com adapters diferentes — e é por isso que o teste
 ponta a ponta roda sem hardware.
 
-Um terceiro comando, `bridge-rtltcp`, não grava nada: só republica.
+Dois comandos-ponte não gravam nada: só republicam.
 
     bridge-rtltcp   RtlTcpIqSource -> ZmqIqPublisher
+    bridge-usrp     UsrpIqSource   -> ZmqIqPublisher
 
-Existe para transformar um `rtl_tcp` (SDR real, na rede, sem GUI) num
-publicador de IQ na :5556 indistinguível do `grs-iq-rx` ou do `grs-sdr-sim` —
-o `grs-demodulator` do outro lado não sabe, e não precisa saber, qual das três
-fontes está publicando.
+Existem para transformar um SDR real na rede (um `rtl_tcp`, ou um USRP N210
+via UHD) num publicador de IQ na :5556 indistinguível do `grs-iq-rx` ou do
+`grs-sdr-sim` — o `grs-demodulator` do outro lado não sabe, e não precisa
+saber, qual das fontes está publicando. `bridge-usrp` só roda dentro da
+imagem `Dockerfile.usrp`: a imagem principal deste serviço não inclui `uhd`.
 """
 
 from __future__ import annotations
@@ -300,6 +302,67 @@ def do_bridge_rtltcp(args: argparse.Namespace, config: RecorderConfig) -> int:
     return 0
 
 
+def do_bridge_usrp(args: argparse.Namespace, config: RecorderConfig) -> int:
+    """Republica um USRP N210 (via UHD) como fonte de IQ na :5556.
+
+    UsrpIqSource -> ZmqIqPublisher, mesmo formato do `bridge-rtltcp`. A
+    diferença fica inteira dentro do adapter: aqui não há protocolo de rede
+    reimplementado, é UHD de verdade — por isso este comando só roda dentro
+    da imagem `Dockerfile.usrp` (`uhd` não existe na imagem principal).
+    """
+    from iq_recorder.adapters.usrp_iq_source import UsrpConnectionError, UsrpIqSource
+    from iq_recorder.adapters.zmq_iq_publisher import ZmqIqPublisher
+
+    profile = config.profile
+    frequency_hz = args.frequency if args.frequency is not None else profile.center_frequency_hz
+    sample_rate_hz = args.sample_rate if args.sample_rate is not None else profile.sample_rate_hz
+    gain_db = args.gain if args.gain is not None else profile.gain_db
+
+    logger.info("Conectando no USRP %s", args.usrp_host)
+
+    try:
+        source = UsrpIqSource(
+            host=args.usrp_host,
+            sample_rate_hz=sample_rate_hz,
+            frequency_hz=frequency_hz,
+            gain_db=gain_db,
+            channel=args.usrp_channel,
+            tune_address=args.tune_source,
+        )
+    except UsrpConnectionError as error:
+        logger.error("%s", error)
+        return 1
+
+    logger.info("sintonia .......... %.4f MHz", frequency_hz / 1e6)
+    logger.info("taxa .............. %.1f kS/s", sample_rate_hz / 1e3)
+    logger.info("ganho ............. %s",
+                "automático" if gain_db is None else f"{gain_db} dB")
+    if args.tune_source:
+        logger.info("sintonia comandável por %s (mesmo contrato do grs-sdr-sim)",
+                    args.tune_source)
+    else:
+        logger.warning("Sem --tune-source: sintonia FIXA. O Station Manager não "
+                       "consegue mover este receptor.")
+
+    publisher = ZmqIqPublisher(config.iq_publish_address)
+    logger.info("publicando IQ em %s", config.iq_publish_address)
+
+    blocks = 0
+    try:
+        for block in source.blocks():
+            if _cancel.is_set():
+                break
+            publisher.publish(block)
+            blocks += 1
+    finally:
+        source.close()
+        publisher.close()
+
+    logger.info("Encerrado após %d lotes.", blocks)
+
+    return 0
+
+
 def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
     """A leitura mínima: tem sinal nesta captura, e onde? (D1)"""
     from iq_recorder.adapters.file_iq_source import FileIqSource
@@ -398,6 +461,26 @@ def build_parser() -> argparse.ArgumentParser:
                           "que o grs-sdr-sim consome. Omitido = sintonia fixa: o "
                           "Station Manager não consegue mover este receptor.")
 
+    usb = sub.add_parser("bridge-usrp",
+                         help="republica um USRP N210 (via UHD) como fonte de IQ na :5556")
+    usb.add_argument("--usrp-host", required=True,
+                     help="IP do USRP na rede (Gigabit Ethernet nativo do N210, "
+                          "padrão de fábrica 192.168.10.2).")
+    usb.add_argument("--usrp-channel", type=int, default=0,
+                     help="Canal RX do USRP. 0 no N210, que tem uma única daughterboard RX.")
+    usb.add_argument("--frequency", type=float, default=None,
+                     help="Sintonia inicial, em Hz. Padrão: a do CaptureProfile "
+                          "(RECORDER_PROFILE).")
+    usb.add_argument("--sample-rate", type=float, default=None,
+                     help="Taxa, em S/s. Padrão: a do CaptureProfile.")
+    usb.add_argument("--gain", type=float, default=None,
+                     help="Ganho manual, em dB. Padrão: o do CaptureProfile "
+                          "(None = automático).")
+    usb.add_argument("--tune-source", default=None,
+                     help="PUB do frequency-synthesizer em :5557, o mesmo contrato "
+                          "que o grs-sdr-sim consome. Omitido = sintonia fixa: o "
+                          "Station Manager não consegue mover este receptor.")
+
     ins = sub.add_parser("inspect", help="resumo e espectro de uma captura")
     ins.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
     ins.add_argument("--fft-size", type=int, default=4096)
@@ -437,6 +520,8 @@ def main(argv: list[str] | None = None) -> int:
         return do_import_wav(args, config)
     if args.command == "bridge-rtltcp":
         return do_bridge_rtltcp(args, config)
+    if args.command == "bridge-usrp":
+        return do_bridge_usrp(args, config)
 
     # Sem subcomando: fica de pé. É o que o serviço faz no compose, onde ele
     # sobe junto com a estação e espera um comando — gravar é sob demanda, e a

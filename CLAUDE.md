@@ -32,6 +32,8 @@ adapters/   zmq_iq_source.py       C1  tap ao vivo no PUB :5556
             wav_iq_source.py           IqStreamSource sobre um WAV do gqrx
             rtltcp_iq_source.py        IqStreamSource sobre rtl_tcp — SDR real,
                                         via rede, sem gqrx, sintonizável por :5557
+            usrp_iq_source.py          IqStreamSource sobre UHD — o USRP N210 real
+                                        da estação, só na imagem Dockerfile.usrp
 application/ record.py  gravar: Source -> Sink -> Index
             replay.py  reproduzir: Source -> Publisher
 schema_check.py  confere o índice no boot
@@ -101,6 +103,40 @@ estação viu — e é assim que uma regressão de DSP fica impossível de repro
   (`librtlsdr/src/rtl_tcp.c`), não deduzido de memória — os testes usam um
   servidor TCP de verdade escrito a partir do mesmo protocolo, não um mock em
   memória que poderia concordar com um erro do adapter em silêncio.
+
+- **O rádio real da estação é um USRP N210, não um dongle RTL-SDR.** O
+  `RtlTcpIqSource`/`bridge-rtltcp` continuam válidos (rede, Gigabit Ethernet
+  vs. `rtl_tcp` sobre USB compartilhado), mas para o hardware de verdade quem
+  importa é `UsrpIqSource`/`bridge-usrp`.
+- **`UsrpIqSource` roda só na imagem `Dockerfile.usrp`, nunca na principal.**
+  `python3-uhd` do Debian só é importável pelo Python do SISTEMA
+  (`/usr/bin/python3`); a imagem principal (`python:3.11-slim`) tem um Python
+  compilado à parte que não enxerga pacotes apt. Confirmado rodando os dois
+  lado a lado — a falha não aparece no build, só no `import uhd` em produção.
+  `_import_uhd()` é tardio de propósito: um `import uhd` no topo do arquivo
+  quebraria `record`/`replay`/`inspect`/`import-wav` na imagem principal.
+- **`Dockerfile.usrp` prende `numpy<2`, e não é estilo.** `libpyuhd` (a
+  extensão compilada do `python3-uhd`) foi construída contra a C-API do NumPy
+  1.x; deixar o pip instalar a família 2.x quebra o `import uhd` com
+  `AttributeError: _ARRAY_API not found` — um erro que não cita numpy em lugar
+  nenhum. Confirmado quebrando de verdade antes da linha existir.
+- **Os testes de `UsrpIqSource` só substituem `MultiUSRP` e `RXMetadata`.**
+  `uhd.types.TuneRequest`, `StreamArgs`, `StreamCMD`, `StreamMode` e
+  `RXMetadataErrorCode` são o módulo `uhd` DE VERDADE, instalado via apt — se
+  o adapter construir um `TuneRequest` errado, o teste falha contra o tipo
+  real, não contra uma suposição sobre ele. `RXMetadata` é a ÚNICA exceção, e
+  por um motivo concreto: o `error_code` do tipo real não tem setter do lado
+  do Python (é pybind11, preenchido por referência dentro do `recv()` em
+  C++) — `uhd.types.RXMetadata().error_code = ...` levanta
+  `AttributeError: property of 'rx_metadata' object has no setter`. Sem
+  hardware para chamar o `recv()` de verdade, não há como simular
+  `overflow`/`timeout` contra o tipo real; `FakeRXMetadata` é um contêiner
+  gravável que usa os MESMOS valores de enum reais por dentro.
+- **O que não foi, e não pôde ser, confirmado:** se `recv()` entrega amostras
+  de verdade, se `set_rx_freq` de fato sintoniza, qualquer coisa que dependa
+  do firmware/FPGA específico do N210 físico. Não há hardware disponível
+  ainda — ver o cabeçalho de `usrp_iq_source.py` para o que FOI confirmado
+  (pacote instalado, API inspecionada, erro de conexão sem hardware).
 
 - **`peak_above_floor_db` usa a MEDIANA como piso, não a média.** A média é
   puxada para cima pelo próprio pico, e num sinal forte o piso pareceria mais

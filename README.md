@@ -59,6 +59,9 @@ python -m iq_recorder.main import-wav beacon.wav --baud 1200 --frequency 1459000
 
 # SDR real, via rede, sem GUI — republica um rtl_tcp na :5556
 python -m iq_recorder.main bridge-rtltcp --rtltcp-host 192.168.1.50     --tune-source tcp://frequency-synthesizer:5557
+
+# USRP N210 real, via UHD — só dentro da imagem Dockerfile.usrp
+python -m iq_recorder.main bridge-usrp --usrp-host 192.168.10.2     --tune-source tcp://frequency-synthesizer:5557
 ```
 
 O `inspect` sai com código 2 quando a captura parece ruído — dá para usá-lo
@@ -66,8 +69,8 @@ como portão antes de gastar uma tarde depurando DSP.
 
 No replay o publicador **BINDA** a :5556: o `grs-iq-rx` (ou o `grs-sdr-sim`)
 tem de estar desligado, ou os dois disputam a porta e quem perde cai em
-silêncio. O `bridge-rtltcp` publica na mesma porta pelo mesmo motivo — é mais
-uma fonte de IQ intercambiável, não um serviço à parte.
+silêncio. `bridge-rtltcp` e `bridge-usrp` publicam na mesma porta pelo mesmo
+motivo — são mais uma fonte de IQ intercambiável, não um serviço à parte.
 
 ### `bridge-rtltcp` — SDR real, sem gqrx, sem GUI
 
@@ -88,6 +91,32 @@ mesmo caminho já validado com o simulador, sem precisar do gqrx nem de
 nenhum passo manual. Protocolo confirmado contra a fonte oficial do
 `librtlsdr` (`src/rtl_tcp.c`), não deduzido — ver o cabeçalho de
 `adapters/rtltcp_iq_source.py`.
+
+### `bridge-usrp` — USRP N210 real, via UHD
+
+O rádio SDR real da estação é um [Ettus/NI USRP
+N210](https://www.ettus.com/all-products/un210-kit/): Gigabit Ethernet
+nativo, não USB — não há dongle nem `rtl_tcp` neste caso. A Ettus não
+documenta o protocolo de rede do USRP para reimplementação por terceiros, só
+recomenda a biblioteca deles (UHD, "USRP Hardware Driver"). Por isso este
+adapter é uma camada fina sobre o UHD, não um cliente de protocolo escrito do
+zero como o `RtlTcpIqSource` — ver o cabeçalho de `adapters/usrp_iq_source.py`
+para o que foi (e o que NÃO foi, por falta de hardware) confirmado.
+
+Roda **só** dentro da imagem `Dockerfile.usrp` — o `python3-uhd` do Debian só
+é importável pelo Python do sistema (`/usr/bin/python3`), e a imagem
+principal deste serviço (`python:3.11-slim`) usa um Python diferente,
+compilado à parte, que não enxerga pacotes instalados via apt.
+
+```bash
+docker build -f Dockerfile.usrp -t grs-iq-recorder-usrp .
+docker run --rm grs-iq-recorder-usrp bridge-usrp     --usrp-host 192.168.10.2 --tune-source tcp://frequency-synthesizer:5557
+```
+
+Com `--tune-source`, assina o mesmo `tune` em `:5557` que o `grs-sdr-sim` e o
+`bridge-rtltcp` já consomem — o Station Manager comanda este receptor pelo
+mesmo caminho, sem precisar saber que do outro lado há UHD em vez de um
+protocolo de rede próprio.
 
 ## Desenho
 
