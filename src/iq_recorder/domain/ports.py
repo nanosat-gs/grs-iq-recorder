@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Iterable, Iterator, Protocol
 
-from iq_recorder.domain.models import CaptureMetadata, CaptureProfile, IqBlock
+from iq_recorder.domain.models import CaptureMetadata, CaptureProfile, IqBlock, RawPacket
 
 
 class IqStreamSource(Protocol):
@@ -67,6 +67,27 @@ class CaptureIndex(Protocol):
     def append(self, metadata: CaptureMetadata) -> None: ...
     def list_captures(self, limit: int = 100) -> Iterable[CaptureMetadata]: ...
     def get(self, capture_id: str) -> CaptureMetadata | None: ...
+
+
+class PacketSource(Protocol):
+    """Raw packets vindos do detector de syncword.
+
+    O iterador entrega `None` quando nada chega numa janela curta. É o que
+    deixa o laço de arquivamento gravar o que está no buffer e perceber um
+    pedido de parada mesmo sem pacote chegando — sem satélite no céu, que é
+    o estado normal da estação.
+    """
+
+    def packets(self) -> Iterator[RawPacket | None]: ...
+    def close(self) -> None: ...
+
+
+class PacketArchive(Protocol):
+    """Arquivo append-only de raw packets — nunca UPDATE, nunca DELETE."""
+
+    def append_many(self, packets: list[RawPacket]) -> None: ...
+    def recent(self, limit: int = 20) -> list[dict]: ...
+    def close(self) -> None: ...
 
 
 class SpectrumView(Protocol):

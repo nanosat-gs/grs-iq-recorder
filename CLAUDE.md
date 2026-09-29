@@ -33,8 +33,11 @@ adapters/   zmq_iq_source.py       C1  tap ao vivo no PUB :5556
             rtltcp_iq_source.py        IqStreamSource sobre rtl_tcp — SDR real,
                                         via rede, sem gqrx, sintonizável por :5557
             zmq_packet_counter.py  D2  conta raw packets do detector (--count-packets)
+            zmq_packet_source.py       PacketSource: raw packets da :5558
+            postgres_packet_archive.py PacketArchive: mission_control.raw_packets
 application/ record.py  gravar: Source -> Sink -> Index
             replay.py  reproduzir: Source -> Publisher
+            archive_packets.py  arquivar: PacketSource -> buffer -> PacketArchive
 schema_check.py  confere o índice no boot
 config.py   o que vem do ambiente
 main.py     boot
@@ -114,6 +117,16 @@ estação viu — e é assim que uma regressão de DSP fica impossível de repro
   Com a fonte desligada, o demodulador tenta resolver um nome inexistente e a
   consulta de DNS trava a thread do ZMQ por segundos; com pausa fixa, dois
   replays do mesmo arquivo deram 13 e 9 pacotes. Com XPUB: 16, 16, 16.
+- **O arquivador de raw packets nunca descarta em silêncio.** Banco fora: o
+  lote fica no buffer e é regravado (retry a cada 5 s); buffer acima de 10
+  mil: os mais antigos saem CONTANDO, com aviso. `connect_timeout=3` no
+  engine não é enfeite — sem ele cada tentativa com o Postgres parado ficava
+  pendurada e o serviço demorava ~30 s para voltar a gravar (e não atendia
+  SIGTERM nesse tempo). O teste do adapter roda contra Postgres de verdade,
+  num schema descartável (`RECORDER_TEST_DATABASE_URL`).
+- **`payload_sha256` não é chave única.** O mesmo payload chegando duas
+  vezes são duas recepções, e o replay gera cópias legítimas dos pacotes do
+  vivo.
 - **`--count-packets` na gravação NÃO espera os pacotes em trânsito; no
   replay, espera.** Ao vivo a fonte continua transmitindo depois do fim, e a
   espera contaria sinal que não está na captura (medido: 20 contra 17). Sem

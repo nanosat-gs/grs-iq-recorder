@@ -351,6 +351,90 @@ def do_bridge_rtltcp(args: argparse.Namespace, config: RecorderConfig) -> int:
     return 0
 
 
+def open_packet_archive(config: RecorderConfig, wait: bool):
+    """O arquivo de raw packets, com o schema criado e conferido.
+
+    `wait`: o serviço sobe junto com o Postgres e não pode morrer só porque
+    o banco ainda está iniciando — tenta de novo até conseguir ou até SIGTERM.
+    """
+    from iq_recorder.adapters.postgres_packet_archive import (
+        REQUIRED_COLUMNS,
+        TABLE_NAME,
+        PostgresPacketArchive,
+    )
+    from iq_recorder.schema_check import check_table
+
+    archive = PostgresPacketArchive(config.database_url)
+    while True:
+        try:
+            archive.ensure_schema()
+            break
+        except Exception as error:  # noqa: BLE001 — banco ainda subindo
+            if not wait or _cancel.is_set():
+                raise
+            logger.warning("Banco indisponível (%s); tentando de novo em 5 s.", error)
+            _cancel.wait(5.0)
+
+    check_table(archive.engine, archive.schema, TABLE_NAME, REQUIRED_COLUMNS,
+                "Arquivo de raw packets")
+    return archive
+
+
+def do_archive_packets(args: argparse.Namespace, config: RecorderConfig) -> int:
+    """Serviço: assina a saída do detector e grava cada raw packet no banco."""
+    from iq_recorder.adapters.zmq_packet_source import ZmqPacketSource
+    from iq_recorder.application.archive_packets import archive_packets
+
+    if config.database_url is None:
+        logger.error("Sem PG_DATABASE_URL não há onde arquivar os raw packets.")
+        return 1
+
+    archive = open_packet_archive(config, wait=True)
+    if _cancel.is_set():
+        return 0
+
+    source = ZmqPacketSource(config.packets_address)
+    logger.info("Arquivando raw packets de %s em %s (sessão %s).",
+                config.packets_address, archive.qualified, archive.run_id)
+
+    try:
+        stats = archive_packets(source=source, archive=archive, cancel=_cancel)
+    finally:
+        source.close()
+        archive.close()
+
+    logger.info("Encerrado: %d recebidos, %d arquivados, %d descartados.",
+                stats.received, stats.archived, stats.dropped)
+
+    return 0 if stats.dropped == 0 else 1
+
+
+def do_packets(args: argparse.Namespace, config: RecorderConfig) -> int:
+    """Os últimos raw packets gravados — para conferir o que está no banco."""
+    if config.database_url is None:
+        logger.error("Sem PG_DATABASE_URL não há banco para consultar.")
+        return 1
+
+    archive = open_packet_archive(config, wait=False)
+    try:
+        total = archive.count()
+        rows = archive.recent(args.limit)
+    finally:
+        archive.close()
+
+    print(f"{total} raw packets em {archive.qualified}. Os {len(rows)} mais recentes:")
+    print(f"{'recebido (UTC)':<27} {'seq':>6} {'bit_offset':>12} {'bytes':>5}  "
+          f"{'início do payload':<32}  sha256")
+    for row in rows:
+        received = row["received_at"].strftime("%Y-%m-%d %H:%M:%S.%f")
+        head = bytes(row["head"]).hex()
+        print(f"{received:<27} {row['detector_seq'] if row['detector_seq'] is not None else '-':>6} "
+              f"{row['bit_offset'] if row['bit_offset'] is not None else '-':>12} "
+              f"{row['bytes']:>5}  {head:<32}  {row['payload_sha256'][:12]}")
+
+    return 0
+
+
 def do_inspect(args: argparse.Namespace, config: RecorderConfig) -> int:
     """A leitura mínima: tem sinal nesta captura, e onde? (D1)"""
     from iq_recorder.adapters.file_iq_source import FileIqSource
@@ -457,6 +541,13 @@ def build_parser() -> argparse.ArgumentParser:
                           "que o grs-sdr-sim consome. Omitido = sintonia fixa: o "
                           "Station Manager não consegue mover este receptor.")
 
+    sub.add_parser("archive-packets",
+                   help="serviço: grava no banco cada raw packet do detector "
+                        "(RECORDER_PACKETS_ADDRESS -> mission_control.raw_packets)")
+
+    pkt = sub.add_parser("packets", help="mostra os últimos raw packets gravados no banco")
+    pkt.add_argument("--limit", type=int, default=20)
+
     ins = sub.add_parser("inspect", help="resumo e espectro de uma captura")
     ins.add_argument("capture", help="Caminho da captura, com ou sem sufixo.")
     ins.add_argument("--fft-size", type=int, default=4096)
@@ -496,6 +587,10 @@ def main(argv: list[str] | None = None) -> int:
         return do_import_wav(args, config)
     if args.command == "bridge-rtltcp":
         return do_bridge_rtltcp(args, config)
+    if args.command == "archive-packets":
+        return do_archive_packets(args, config)
+    if args.command == "packets":
+        return do_packets(args, config)
 
     # Sem subcomando: fica de pé. É o que o serviço faz no compose, onde ele
     # sobe junto com a estação e espera um comando — gravar é sob demanda, e a

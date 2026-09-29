@@ -68,6 +68,33 @@ detector de syncword (`RECORDER_PACKETS_ADDRESS`) durante a gravação ou o
 replay — o gravador não demodula nada, então conta do lado de fora, que é o
 que prova o cano inteiro.
 
+### Arquivo de raw packets no banco
+
+`archive-packets` é um serviço (no compose: `grs-packet-archiver`) que assina
+a saída do detector de syncword e grava cada raw packet em
+`mission_control.raw_packets`, append-only. Sem ele, o que sai da :5558
+some: PUB não guarda nada.
+
+Cada linha: horário de recepção em solo (µs), `detected_at` do detector
+(resolução de 1 s), `detector_seq`, `bit_offset`, syncword, tolerância, o
+payload cru (255 bytes), o SHA-256 dele, o cabeçalho JSON inteiro e a sessão
+do arquivador (`archiver_run` — a numeração do detector recomeça quando ele
+reinicia). Não é telemetria: é o que a decodificação NGHam vai ler.
+
+```bash
+docker compose exec grs-packet-archiver python -m iq_recorder.main packets --limit 20
+```
+
+Se o banco cair, os pacotes ficam num buffer e são regravados quando ele
+volta; o que passar do teto (10 mil) é contado e avisado no log. Medido com o
+Postgres parado 15 s e o simulador transmitindo: voltou a gravar 3 s depois
+de o banco subir, sequência sem buracos.
+
+Replays também passam pelo detector e também são arquivados — são recepções
+do cano. Pacotes publicados antes de o arquivador conectar (logo depois de
+subir) se perdem, como em qualquer PUB/SUB: o arquivador tem de estar de pé
+antes da passagem.
+
 ### Replay pelo cano (compose)
 
 O replay **BINDA** a :5556 e precisa responder pelo nome da fonte ao vivo

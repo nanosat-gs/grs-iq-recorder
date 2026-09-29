@@ -44,38 +44,42 @@ QUERY = text(
 
 
 def check_schema(engine: Engine) -> bool:
-    """:return: True se o índice está como este serviço espera."""
+    """:return: True se o índice de capturas está como este serviço espera."""
+    return check_table(engine, SCHEMA_NAME, TABLE_NAME, REQUIRED_COLUMNS, "Índice de capturas")
+
+
+def check_table(engine: Engine, schema: str, table: str,
+                required: tuple[str, ...], label: str) -> bool:
+    """Confere uma tabela nossa contra as colunas que o código usa."""
+    qualified = f"{schema}.{table}"
     try:
         with engine.connect() as connection:
             found = {row.column_name for row in connection.execute(
-                QUERY, {"schema": SCHEMA_NAME, "table": TABLE_NAME}
+                QUERY, {"schema": schema, "table": table}
             )}
     except Exception:
-        logger.exception(
-            "Não consegui conferir o índice de capturas. A gravação segue; "
-            "a indexação pode falhar no fim de cada captura."
-        )
+        logger.exception("Não consegui conferir %s (%s).", label, qualified)
         return False
 
     if not found:
         logger.warning(
             "Tabela %s não existe. O ensure_schema() do boot deveria tê-la criado — "
             "confira as permissões do usuário do banco para CREATE SCHEMA.",
-            QUALIFIED,
+            qualified,
         )
         return False
 
-    missing = [column for column in REQUIRED_COLUMNS if column not in found]
+    missing = [column for column in required if column not in found]
 
     if missing:
         logger.warning(
-            "Índice de capturas divergente: %s não tem %s. Uma tabela criada por "
-            "uma versão anterior não ganha colunas novas no CREATE TABLE IF NOT "
-            "EXISTS — é preciso ALTER TABLE à mão.",
-            QUALIFIED, ", ".join(missing),
+            "%s divergente: %s não tem %s. Uma tabela criada por uma versão "
+            "anterior não ganha colunas novas no CREATE TABLE IF NOT EXISTS — é "
+            "preciso ALTER TABLE à mão.",
+            label, qualified, ", ".join(missing),
         )
         return False
 
-    logger.info("Índice de capturas confere: %d colunas em %s.", len(REQUIRED_COLUMNS), QUALIFIED)
+    logger.info("%s confere: %d colunas em %s.", label, len(required), qualified)
 
     return True

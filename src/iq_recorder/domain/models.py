@@ -189,3 +189,29 @@ class CaptureSummary:
         """
         return self.peak_above_floor_db >= 6.0
 
+
+@dataclass(frozen=True)
+class RawPacket:
+    """Um raw packet do detector de syncword, como chegou.
+
+    NÃO é telemetria decodificada: são os bytes depois do syncword, sem saber
+    onde o quadro NGHam termina. Guardado cru, porque é a coisa mais próxima
+    do rádio que ainda é um pacote — decodificar depois, e de novo quando o
+    decodificador mudar, só é possível se o cru estiver guardado.
+    """
+
+    # Relógio da estação, no momento em que o pacote chegou ao arquivador.
+    # Microssegundos: o `detected_at` do detector tem resolução de 1 s, fraca
+    # para ordenar pacotes que chegam a cada ~0,67 s.
+    received_at: datetime
+    payload: bytes
+    # O cabeçalho JSON do detector, inteiro. Os campos abaixo são extraídos
+    # dele por conveniência de consulta; o original fica para o que o
+    # detector passar a publicar e esta versão ainda não conhece.
+    header: dict
+    detector_seq: int | None
+    bit_offset: int | None
+    detected_at: datetime | None
+    syncword: str | None
+    max_sync_errors: int | None
+
