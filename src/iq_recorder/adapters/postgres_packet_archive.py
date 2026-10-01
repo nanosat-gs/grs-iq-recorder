@@ -44,6 +44,7 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "header",
     "archiver_run",
     "archived_at",
+    "radio",
 )
 
 
@@ -75,9 +76,16 @@ def _ddl(schema: str) -> list[str]:
             -- Uma por processo do arquivador: separa sessões, já que a
             -- numeração do detector não é única entre reinícios.
             archiver_run     UUID NOT NULL,
-            archived_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+            archived_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            -- De que rádio da estação veio (vhf, uhf...): um arquivador por
+            -- cadeia de recepção, cada um com o seu RECORDER_RADIO. NULL nas
+            -- linhas de antes de a estação ter mais de um rádio.
+            radio            TEXT
         )
         """,
+        # Bancos criados antes da coluna existir: CREATE TABLE IF NOT EXISTS
+        # não adiciona coluna. É o único ALTER que a tabela já precisou.
+        f"ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS radio TEXT",
         f"CREATE INDEX IF NOT EXISTS {TABLE_NAME}_received_at_idx "
         f"ON {qualified} (received_at DESC)",
         f"CREATE INDEX IF NOT EXISTS {TABLE_NAME}_payload_sha256_idx "
@@ -89,13 +97,15 @@ class PostgresPacketArchive:
     """Implementa PacketArchive sobre Postgres."""
 
     def __init__(self, database_url: str, schema: str = DEFAULT_SCHEMA,
-                 engine: Engine | None = None, run_id: uuid.UUID | None = None) -> None:
+                 engine: Engine | None = None, run_id: uuid.UUID | None = None,
+                 radio: str | None = None) -> None:
         if not schema.replace("_", "").isalnum():
             raise ValueError(f"nome de schema inválido: {schema!r}")
 
         self.schema = schema
         self.qualified = f"{schema}.{TABLE_NAME}"
         self.run_id = run_id or uuid.uuid4()
+        self.radio = (radio or "").strip() or None
         # connect_timeout curto: com o banco fora, o padrão da libpq deixava
         # cada tentativa pendurada por dezenas de segundos, e o laço inteiro
         # esperava junto — medido: ~30 s até voltar a gravar depois de o
@@ -107,11 +117,11 @@ class PostgresPacketArchive:
         self._insert = text(f"""
             INSERT INTO {self.qualified} (
                 received_at, detected_at, detector_seq, bit_offset, syncword,
-                max_sync_errors, payload, payload_sha256, header, archiver_run
+                max_sync_errors, payload, payload_sha256, header, archiver_run, radio
             ) VALUES (
                 :received_at, :detected_at, :detector_seq, :bit_offset, :syncword,
                 :max_sync_errors, :payload, :payload_sha256, CAST(:header AS JSONB),
-                :archiver_run
+                :archiver_run, :radio
             )
         """)
 
@@ -145,7 +155,7 @@ class PostgresPacketArchive:
         query = text(f"""
             SELECT id, received_at, detected_at, detector_seq, bit_offset, syncword,
                    max_sync_errors, length(payload) AS bytes, payload_sha256,
-                   substring(payload from 1 for 16) AS head, archiver_run
+                   substring(payload from 1 for 16) AS head, archiver_run, radio
             FROM {self.qualified}
             ORDER BY received_at DESC, id DESC
             LIMIT :limit
@@ -172,4 +182,5 @@ class PostgresPacketArchive:
             "payload_sha256": hashlib.sha256(packet.payload).hexdigest(),
             "header": json.dumps(packet.header, sort_keys=True),
             "archiver_run": str(self.run_id),
+            "radio": self.radio,
         }

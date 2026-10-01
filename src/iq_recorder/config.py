@@ -34,6 +34,8 @@ class RecorderConfig:
     max_capture_seconds: int
     database_url: str | None
     packets_address: str = DEFAULT_PACKETS_ADDRESS
+    # Rádio da cadeia cujos pacotes este arquivador grava (vhf, uhf...).
+    radio: str | None = None
 
 
 def _int_from(source: dict[str, str], name: str, default: int) -> int:
@@ -76,4 +78,5 @@ def load_config(env: dict[str, str] | None = None) -> RecorderConfig:
         # falhar.
         database_url=source.get("PG_DATABASE_URL") or None,
         packets_address=source.get("RECORDER_PACKETS_ADDRESS", DEFAULT_PACKETS_ADDRESS),
+        radio=(source.get("RECORDER_RADIO") or "").strip() or None,
     )

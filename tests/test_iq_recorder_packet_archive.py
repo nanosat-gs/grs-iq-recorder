@@ -310,3 +310,42 @@ def test_schema_check_confere_a_tabela_nova(pg_archive):
 
     assert check_table(pg_archive.engine, pg_archive.schema, TABLE_NAME,
                        REQUIRED_COLUMNS, "teste") is True
+
+
+def test_postgres_marca_o_radio_de_cada_pacote(pg_archive):
+    """Um arquivador por cadeia de recepção: o pacote do beacon (vhf) e o de
+    dados (uhf) chegam à mesma tabela e só a coluna diz de onde vieram."""
+    from iq_recorder.adapters.postgres_packet_archive import PostgresPacketArchive
+
+    pg_archive.ensure_schema()
+    uhf = PostgresPacketArchive(DATABASE_URL, schema=pg_archive.schema, radio="uhf")
+    try:
+        pg_archive.append_many([packet(0)])
+        uhf.append_many([packet(1)])
+        rows = {r["detector_seq"]: r["radio"] for r in pg_archive.recent(10)}
+    finally:
+        uhf.close()
+
+    assert rows == {0: None, 1: "uhf"}
+
+
+def test_postgres_tabela_antiga_ganha_a_coluna_radio(pg_archive):
+    """CREATE TABLE IF NOT EXISTS não adiciona coluna: um banco de antes dos
+    rádios precisa do ALTER, ou o INSERT novo falha no meio da passagem."""
+    from sqlalchemy import text
+
+    with pg_archive.engine.begin() as connection:
+        connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {pg_archive.schema}"))
+        connection.execute(text(f"""
+            CREATE TABLE {pg_archive.qualified} (
+                id BIGSERIAL PRIMARY KEY, received_at TIMESTAMPTZ NOT NULL,
+                detected_at TIMESTAMPTZ, detector_seq BIGINT, bit_offset BIGINT,
+                syncword TEXT, max_sync_errors INTEGER, payload BYTEA NOT NULL,
+                payload_sha256 TEXT NOT NULL, header JSONB NOT NULL,
+                archiver_run UUID NOT NULL, archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW())
+        """))
+
+    pg_archive.ensure_schema()
+    pg_archive.append_many([packet(0)])
+
+    assert pg_archive.recent(1)[0]["radio"] is None

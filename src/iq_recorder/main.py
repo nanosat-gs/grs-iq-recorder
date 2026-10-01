@@ -364,7 +364,7 @@ def open_packet_archive(config: RecorderConfig, wait: bool):
     )
     from iq_recorder.schema_check import check_table
 
-    archive = PostgresPacketArchive(config.database_url)
+    archive = PostgresPacketArchive(config.database_url, radio=config.radio)
     while True:
         try:
             archive.ensure_schema()
@@ -394,8 +394,9 @@ def do_archive_packets(args: argparse.Namespace, config: RecorderConfig) -> int:
         return 0
 
     source = ZmqPacketSource(config.packets_address)
-    logger.info("Arquivando raw packets de %s em %s (sessão %s).",
-                config.packets_address, archive.qualified, archive.run_id)
+    logger.info("Arquivando raw packets de %s em %s (sessão %s, rádio %s).",
+                config.packets_address, archive.qualified, archive.run_id,
+                config.radio or "não informado")
 
     try:
         stats = archive_packets(source=source, archive=archive, cancel=_cancel)
@@ -423,12 +424,13 @@ def do_packets(args: argparse.Namespace, config: RecorderConfig) -> int:
         archive.close()
 
     print(f"{total} raw packets em {archive.qualified}. Os {len(rows)} mais recentes:")
-    print(f"{'recebido (UTC)':<27} {'seq':>6} {'bit_offset':>12} {'bytes':>5}  "
+    print(f"{'recebido (UTC)':<27} {'rádio':<6} {'seq':>6} {'bit_offset':>12} {'bytes':>5}  "
           f"{'início do payload':<32}  sha256")
     for row in rows:
         received = row["received_at"].strftime("%Y-%m-%d %H:%M:%S.%f")
         head = bytes(row["head"]).hex()
-        print(f"{received:<27} {row['detector_seq'] if row['detector_seq'] is not None else '-':>6} "
+        print(f"{received:<27} {row['radio'] or '-':<6} "
+              f"{row['detector_seq'] if row['detector_seq'] is not None else '-':>6} "
               f"{row['bit_offset'] if row['bit_offset'] is not None else '-':>12} "
               f"{row['bytes']:>5}  {head:<32}  {row['payload_sha256'][:12]}")
 

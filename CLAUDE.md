@@ -85,6 +85,12 @@ estação viu — e é assim que uma regressão de DSP fica impossível de repro
 
 ## Armadilhas conhecidas
 
+- **Um arquivador por cadeia de recepção, e `RECORDER_RADIO` diz qual.** A
+  estação tem um rádio por faixa (VHF, UHF), cada um com seu detector; os
+  pacotes dos dois vão para a mesma `raw_packets`, e só a coluna `radio`
+  separa. Bancos de antes dela ganham a coluna com `ALTER TABLE ... ADD
+  COLUMN IF NOT EXISTS` no `ensure_schema`.
+
 - **`import-wav` produz RECONSTRUÇÃO, não captura de antena.** O WAV do gqrx
   em Narrow FM já passou pelo discriminador; o adapter integra aquilo de volta
   à fase. O resultado tem envoltória constante por construção, e o que o gqrx
