@@ -1,8 +1,11 @@
-# Contrato de schema do índice de capturas
+# Contrato de schema do gravador
 
-Este documento é normativo. Quem o implementa é
-[`postgres_capture_index.py`](../src/iq_recorder/adapters/postgres_capture_index.py),
-e [`schema_check.py`](../src/iq_recorder/schema_check.py) o confere no boot.
+Este documento é normativo. Quem o implementa são
+[`postgres_capture_index.py`](../src/iq_recorder/adapters/postgres_capture_index.py)
+(índice de capturas) e
+[`postgres_packet_archive.py`](../src/iq_recorder/adapters/postgres_packet_archive.py)
+(arquivo de raw packets), e [`schema_check.py`](../src/iq_recorder/schema_check.py)
+o confere no boot.
 
 ## Esta tabela é nossa, e isso muda tudo
 
@@ -60,6 +63,32 @@ E é o hash do **`.sigmf-data`**, nunca do sidecar: o sidecar ganha anotação
 depois da gravação (o PSD do D1, a contagem de frames do D2), enquanto as
 amostras são imutáveis por definição. Hash de coisa que muda não verifica nada.
 
+## `mission_control.raw_packets` — append-only
+
+Escrita pelo `archive-packets` (no compose: `grs-packet-archiver` e
+`grs-packet-archiver-uhf`, um por rádio). Cada linha é um raw packet como o
+detector de syncword o publicou: uma observação, não telemetria. A mesma regra
+da tabela de capturas: sem UPDATE, sem DELETE.
+
+| Coluna | Tipo | O que é |
+|---|---|---|
+| `id` | `BIGSERIAL PRIMARY KEY` | |
+| `received_at` | `TIMESTAMPTZ NOT NULL` | relógio da estação ao chegar ao arquivador (µs) |
+| `detected_at` | `TIMESTAMPTZ` | relógio do detector, resolução de 1 s |
+| `detector_seq`, `bit_offset` | `BIGINT` | numeração do detector — recomeça quando ele reinicia |
+| `syncword` | `TEXT` | o syncword procurado |
+| `max_sync_errors` | `INTEGER` | a tolerância em vigor, não a distância medida |
+| `payload` | `BYTEA NOT NULL` | os 255 bytes depois do syncword, crus |
+| `payload_sha256` | `TEXT NOT NULL` | para agrupar e achar repetidos; **não** é único (replay gera cópias legítimas) |
+| `header` | `JSONB NOT NULL` | o cabeçalho do detector, inteiro |
+| `archiver_run` | `UUID NOT NULL` | uma por processo do arquivador: separa sessões |
+| `archived_at` | `TIMESTAMPTZ NOT NULL DEFAULT now()` | |
+| `radio` | `TEXT` | de que cadeia veio (`vhf`, `uhf`), do `RECORDER_RADIO` do arquivador; `NULL` nas linhas de antes de haver dois rádios |
+
+Índices em `received_at DESC` e `payload_sha256`. A coluna `radio` entrou
+depois da tabela: bancos antigos a ganham no boot com
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+
 ## O que o `schema_check` pega
 
 Como a tabela nasce de `ensure_schema()`, a divergência só aparece de dois
@@ -89,5 +118,9 @@ Acrescentar coluna a uma instalação que já existe:
 ALTER TABLE mission_control.iq_captures ADD COLUMN nova_coluna TEXT;
 ```
 
-E acrescentá-la a `REQUIRED_COLUMNS` em `postgres_capture_index.py`, senão o
-`schema_check` não a confere e a divergência volta a ser silenciosa.
+E acrescentá-la a `REQUIRED_COLUMNS` do adapter da tabela
+(`postgres_capture_index.py` ou `postgres_packet_archive.py`), senão o
+`schema_check` não a confere e a divergência volta a ser silenciosa. Melhor
+ainda, como fez a `raw_packets.radio`: um `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS` na lista de DDL do adapter, e a instalação existente se ajusta sozinha
+no boot.

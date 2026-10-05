@@ -2,9 +2,11 @@
 
 Captura, replay e índice do fluxo de IQ da estação terrestre SpaceLab.
 
-É o único bloco da metade de RF escrito pela equipe. Os outros três
-(`grs-iq-rx`, `grs-demodulator`, `grs-syncword-detector`) são adotados do
-`spacelab-ufsc`; este nasce aqui porque não existe lá.
+Foi o primeiro bloco da metade de RF escrito pela equipe (depois vieram o
+`grs-sdr-sim`, o `grs-fft` e o `grs-spectrum-monitor`). Os blocos do cano
+propriamente dito (`grs-iq-rx`, `grs-demodulator`, `grs-syncword-detector`,
+`grs-frequency-synthesizer`) são forks do `spacelab-ufsc`; este nasce aqui
+porque não existe lá.
 
 ## Para que serve
 
@@ -39,7 +41,6 @@ regressão de toda a metade de RF.
 | C2 | `FileIqSink` — grava o par SigMF e o hash |
 | C3 | `FileIqSource` + `ZmqIqPublisher` — replay |
 | C4 | `PostgresCaptureIndex` + `schema_check` no boot |
-
 | D1 | `NumpyPsdView` — PSD, resumo e `inspect` |
 
 ## Usando
@@ -77,9 +78,17 @@ some: PUB não guarda nada.
 
 Cada linha: horário de recepção em solo (µs), `detected_at` do detector
 (resolução de 1 s), `detector_seq`, `bit_offset`, syncword, tolerância, o
-payload cru (255 bytes), o SHA-256 dele, o cabeçalho JSON inteiro e a sessão
+payload cru (255 bytes), o SHA-256 dele, o cabeçalho JSON inteiro, a sessão
 do arquivador (`archiver_run` — a numeração do detector recomeça quando ele
-reinicia). Não é telemetria: é o que a decodificação NGHam vai ler.
+reinicia) e o **rádio** de que veio. Não é telemetria: é o que a
+decodificação NGHam vai ler. Colunas em
+[docs/schema-contract.md](docs/schema-contract.md).
+
+Há um arquivador por cadeia de recepção — `grs-packet-archiver` (VHF) e
+`grs-packet-archiver-uhf` —, cada um com o seu `RECORDER_RADIO`, gravando na
+mesma tabela. O detector de cada cadeia tem IP fixo no compose: sem isso, a
+troca de IP entre containers recriados fez um arquivador gravar pacotes do
+outro rádio com o rótulo errado, sem erro nenhum.
 
 ```bash
 docker compose exec grs-packet-archiver python -m iq_recorder.main packets --limit 20
